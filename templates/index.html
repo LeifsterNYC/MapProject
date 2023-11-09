@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Route Planner</title>
+  <link rel="stylesheet" href="static/css/style.css">
+</head>
+
+<body>
+  <h1>Route Planner</h1>
+  <form action="/" method="POST">
+    <label for="start_address">Starting Address:</label>
+    <input type="text" name="start_address" placeholder="Starting address">
+    <br>
+
+    <label for="end_address">Ending Address:</label>
+    <input type="text" name="end_address" placeholder="Ending address">
+    <br>
+
+    <input type="submit" value="Get Route">
+  </form>
+  {% if distance %}
+  <p>Distance: {{ distance }} miles</p>
+  {% endif %}
+
+  {% if route_map %}
+  {{ route_map|safe }}
+  {% endif %}
+</body>
+
+</html>
