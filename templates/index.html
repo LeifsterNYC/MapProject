@@ -1,31 +1,325 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-  <title>Route Planner</title>
-  <link rel="stylesheet" href="static/css/style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scenic Route</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:           #f0ebe0;
+      --input-bg:     #faf8f3;
+      --border:       #c4b99a;
+      --border-dark:  #8a7a5e;
+      --ink:          #1a2618;
+      --muted:        #6b6252;
+      --green:        #2d5c27;
+      --blue:         #1a3c60;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      background-color: var(--bg);
+      background-image:
+        repeating-linear-gradient(0deg,
+          transparent, transparent 35px,
+          rgba(139,119,78,.055) 35px, rgba(139,119,78,.055) 36px),
+        repeating-linear-gradient(90deg,
+          transparent, transparent 35px,
+          rgba(139,119,78,.04) 35px, rgba(139,119,78,.04) 36px);
+      font-family: 'IBM Plex Mono', monospace;
+      color: var(--ink);
+    }
+
+    /* ── Header ─────────────────────────────── */
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 2rem;
+      padding: 1.5rem 2.5rem 1.1rem;
+      border-bottom: 2px solid var(--ink);
+    }
+
+    .wordmark {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 2.3rem;
+      font-weight: 600;
+      letter-spacing: -0.015em;
+      line-height: 1;
+    }
+
+    .wordmark em {
+      font-style: italic;
+      font-weight: 400;
+      color: var(--green);
+    }
+
+    .tagline {
+      font-size: 0.6rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .legend {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 1.4rem;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .legend-item { display: flex; align-items: center; gap: 0.45rem; }
+
+    .legend-line {
+      width: 26px; height: 3px; border-radius: 1px;
+    }
+    .legend-line.fast   { background: var(--blue);  opacity: 0.7; }
+    .legend-line.scenic { background: var(--green); }
+
+    /* ── Address inputs ──────────────────────── */
+    .addr-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 3rem;
+      padding: 1.4rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .field { display: flex; flex-direction: column; gap: 0.38rem; }
+
+    .field label {
+      font-size: 0.58rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    input[type=text] {
+      width: 100%;
+      background: transparent;
+      border: none;
+      border-bottom: 1.5px solid var(--border-dark);
+      padding: 0.52rem 0.3rem;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.83rem;
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.18s;
+    }
+    input[type=text]::placeholder { color: var(--border-dark); }
+    input[type=text]:focus        { border-bottom-color: var(--green); }
+
+    /* ── Sliders ─────────────────────────────── */
+    .slider-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0 2.5rem;
+      padding: 1.1rem 2.5rem 1.3rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .slider-field { display: flex; flex-direction: column; gap: 0.55rem; }
+
+    .slider-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+
+    .slider-field label {
+      font-size: 0.58rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .val {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--ink);
+      min-width: 2.8rem;
+      text-align: right;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 1px;
+      background: var(--border-dark);
+      outline: none;
+      cursor: pointer;
+      margin: 2px 0;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: var(--ink);
+      cursor: pointer;
+      transition: transform 0.12s, background 0.12s;
+    }
+    input[type=range]::-webkit-slider-thumb:hover {
+      transform: scale(1.35);
+      background: var(--green);
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 11px; height: 11px;
+      border: none; border-radius: 50%;
+      background: var(--ink);
+      cursor: pointer;
+    }
+
+    /* ── Submit bar ──────────────────────────── */
+    .action-row {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      padding: 0.95rem 2.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    button[type=submit] {
+      background: var(--ink);
+      color: var(--bg);
+      border: none;
+      padding: 0.58rem 2rem;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.18s;
+    }
+    button[type=submit]:hover { background: var(--green); }
+
+    .dist {
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .dist strong { color: var(--ink); font-weight: 500; }
+
+    /* ── Map ─────────────────────────────────── */
+    #map-wrap {
+      padding: 1.8rem 2.5rem 2.5rem;
+    }
+
+    #map-frame {
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--ink);
+      overflow: hidden;
+    }
+
+    #map-frame iframe {
+      display: block;
+      width: 100% !important;
+      border: none !important;
+    }
+  </style>
 </head>
 
 <body>
-  <h1>Route Planner</h1>
   <form action="/" method="POST">
-    <label for="start_address">Starting Address:</label>
-    <input type="text" name="start_address" placeholder="Starting address">
-    <br>
 
-    <label for="end_address">Ending Address:</label>
-    <input type="text" name="end_address" placeholder="Ending address">
-    <br>
+    <header>
+      <div>
+        <div class="wordmark">Scenic <em>Route</em></div>
+        <div class="tagline">OpenStreetMap · NetworkX · Folium</div>
+      </div>
+      {% if distance %}
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-line fast"></div>
+          <span>Fastest</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-line scenic"></div>
+          <span>Scenic</span>
+        </div>
+      </div>
+      {% endif %}
+    </header>
 
-    <input type="submit" value="Get Route">
+    <div class="addr-row">
+      <div class="field">
+        <label for="start_address">From</label>
+        <input type="text" id="start_address" name="start_address"
+               placeholder="Starting address">
+      </div>
+      <div class="field">
+        <label for="end_address">To</label>
+        <input type="text" id="end_address" name="end_address"
+               placeholder="Destination">
+      </div>
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-field">
+        <div class="slider-head">
+          <label for="curviness_weight">Curviness</label>
+          <span class="val" id="v_curve">{{ "%.1f"|format(curviness_weight) }}</span>
+        </div>
+        <input type="range" id="curviness_weight" name="curviness_weight"
+               min="0" max="2" step="0.1" value="{{ curviness_weight }}"
+               oninput="document.getElementById('v_curve').textContent=(+this.value).toFixed(1)">
+      </div>
+
+      <div class="slider-field">
+        <div class="slider-head">
+          <label for="nature_weight">Nature</label>
+          <span class="val" id="v_nat">{{ "%.1f"|format(nature_weight) }}</span>
+        </div>
+        <input type="range" id="nature_weight" name="nature_weight"
+               min="0" max="2" step="0.1" value="{{ nature_weight }}"
+               oninput="document.getElementById('v_nat').textContent=(+this.value).toFixed(1)">
+      </div>
+
+      <div class="slider-field">
+        <div class="slider-head">
+          <label for="road_type_weight">Road Type</label>
+          <span class="val" id="v_road">{{ "%.1f"|format(road_type_weight) }}</span>
+        </div>
+        <input type="range" id="road_type_weight" name="road_type_weight"
+               min="0" max="2" step="0.1" value="{{ road_type_weight }}"
+               oninput="document.getElementById('v_road').textContent=(+this.value).toFixed(1)">
+      </div>
+
+      <div class="slider-field">
+        <div class="slider-head">
+          <label for="max_detour">Max Detour</label>
+          <span class="val" id="v_det">{{ "%.1f"|format(max_detour) }}×</span>
+        </div>
+        <input type="range" id="max_detour" name="max_detour"
+               min="1.0" max="3.0" step="0.1" value="{{ max_detour }}"
+               oninput="document.getElementById('v_det').textContent=(+this.value).toFixed(1)+'×'">
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button type="submit">Find Route</button>
+      {% if distance %}
+      <span class="dist">
+        straight-line &mdash; <strong>{{ "%.1f"|format(distance) }} mi</strong>
+      </span>
+      {% endif %}
+    </div>
+
   </form>
-  {% if distance %}
-  <p>Distance: {{ distance }} miles</p>
-  {% endif %}
 
   {% if route_map %}
-  {{ route_map|safe }}
+  <div id="map-wrap">
+    <div id="map-frame">
+      {{ route_map|safe }}
+    </div>
+  </div>
   {% endif %}
-</body>
 
+</body>
 </html>
