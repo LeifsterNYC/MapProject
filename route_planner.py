@@ -78,14 +78,14 @@ def _road_type_score(data):
     if isinstance(highway, list):
         highway = highway[0]
     table = {
-        'motorway': 0.0, 'trunk': 0.0, 'primary': 0.05,
-        'motorway_link': 0.0, 'trunk_link': 0.0, 'primary_link': 0.05,
-        'secondary': 0.2, 'secondary_link': 0.2,
+        'motorway': 0.0, 'trunk': 0.0, 'primary': 0.3,
+        'motorway_link': 0.0, 'trunk_link': 0.0, 'primary_link': 0.1,
+        'secondary': 0.4, 'secondary_link': 0.4,
         'tertiary': 0.8, 'tertiary_link': 0.8,
-        'unclassified': 1.0, 'residential': 0.5,
-        'living_street': 0.9, 'service': 0.3,
+        'unclassified': 1.0, 'residential': 0.3,
+        'living_street': 0.6, 'service': 0.1,
     }
-    return table.get(highway, 0.5)
+    return table.get(highway, 0.4)
 
 
 def _nature_score(data):
@@ -101,17 +101,35 @@ def _nature_score(data):
     return min(score, 1.0)
 
 
+def _speed_score(data):
+    speed = data.get('maxspeed', 35)
+    # Peaks at 45-55 mph (open country road). Penalizes slow urban roads and
+    # very fast highways where you're just a number in traffic.
+    if speed >= 65:
+        return 0.4
+    elif speed >= 55:
+        return 1.0
+    elif speed >= 45:
+        return 0.8
+    elif speed >= 35:
+        return 0.4
+    else:
+        return 0.0
+
+
 def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    max_score = w_curve + w_road + w_nature
+    # Speed is always included at weight 1.0 — open-road feel is not optional.
+    max_score = w_curve + w_road + w_nature + 1.0
 
     for u, v, k, data in G.edges(data=True, keys=True):
         scenic_score = (
             w_curve * _curviness_score(data) +
             w_road * _road_type_score(data) +
-            w_nature * _nature_score(data)
+            w_nature * _nature_score(data) +
+            _speed_score(data)
         )
         data['scenic_score'] = scenic_score
         # Exponential penalty: unscenic roads cost much more, scenic roads much less.
