@@ -360,19 +360,36 @@
   </div>
 
   <script>
-    const stages = [
-      [0,    'Geocoding addresses\u2026'],
-      [3000,  'Fetching road network\u2026'],
-      [12000, 'Scoring scenic edges\u2026'],
-      [22000, 'Computing routes\u2026'],
-    ];
-    document.querySelector('form').addEventListener('submit', function() {
+    document.querySelector('form').addEventListener('submit', function(e) {
+      e.preventDefault();
       const overlay = document.getElementById('loading');
       const msg = document.getElementById('loading-msg');
       overlay.classList.add('active');
-      stages.forEach(([delay, text]) => {
-        setTimeout(() => { msg.textContent = text; }, delay);
-      });
+      msg.textContent = 'Geocoding addresses\u2026';
+
+      const params = new URLSearchParams(new FormData(this));
+      const es = new EventSource('/stream?' + params.toString());
+
+      es.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        if (data.stage) {
+          msg.textContent = data.stage;
+        } else if (data.done) {
+          es.close();
+          document.open();
+          document.write(data.html);
+          document.close();
+        } else if (data.error) {
+          es.close();
+          overlay.classList.remove('active');
+          alert(data.error);
+        }
+      };
+
+      es.onerror = function() {
+        es.close();
+        overlay.classList.remove('active');
+      };
     });
   </script>
 </body>
