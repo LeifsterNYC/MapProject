@@ -309,6 +309,9 @@
         straight-line &mdash; <strong>{{ "%.1f"|format(distance) }} mi</strong>
       </span>
       {% endif %}
+      {% if error %}
+      <span class="dist" style="color:#8b2020">{{ error }}</span>
+      {% endif %}
     </div>
 
   </form>

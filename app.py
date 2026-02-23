@@ -36,6 +36,16 @@ def index():
 
         distance = geodesic(start_coords, end_coords).miles
 
+        MAX_DISTANCE_MILES = 50
+        if distance > MAX_DISTANCE_MILES:
+            return render_template('index.html',
+                error=f"Addresses are {distance:.0f} miles apart. Please keep routes under {MAX_DISTANCE_MILES} miles.",
+                curviness_weight=curviness_weight,
+                nature_weight=nature_weight,
+                road_type_weight=road_type_weight,
+                max_detour=max_detour,
+            )
+
         graph, route_map = initialize_graph(start_coords, end_coords)
 
         start_node = osmnx.distance.nearest_nodes(graph, X=[start_coords[1]], Y=[start_coords[0]])
