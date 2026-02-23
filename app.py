@@ -54,7 +54,7 @@ def stream():
     curviness_weight = float(request.args.get('curviness_weight', 1.0))
     nature_weight = float(request.args.get('nature_weight', 1.0))
     road_type_weight = float(request.args.get('road_type_weight', 1.0))
-    max_detour = float(request.args.get('max_detour', 2.0))
+    max_detour = float(request.args.get('max_detour', 3.0))
 
     def generate():
         def event(data):
@@ -123,7 +123,7 @@ def index():
         curviness_weight = float(request.form.get('curviness_weight', 1.0))
         nature_weight = float(request.form.get('nature_weight', 1.0))
         road_type_weight = float(request.form.get('road_type_weight', 1.0))
-        max_detour = float(request.form.get('max_detour', 2.0))
+        max_detour = float(request.form.get('max_detour', 3.0))
 
         try:
             distance, map_html = _compute_route(
@@ -143,7 +143,7 @@ def index():
 
     return render_template('index.html',
         curviness_weight=1.0, nature_weight=1.0,
-        road_type_weight=1.0, max_detour=2.0)
+        road_type_weight=1.0, max_detour=3.0)
 
 
 if __name__ == '__main__':

@@ -80,9 +80,9 @@ def _road_type_score(data):
     table = {
         'motorway': 0.0, 'trunk': 0.0, 'primary': 0.05,
         'motorway_link': 0.0, 'trunk_link': 0.0, 'primary_link': 0.05,
-        'secondary': 0.5, 'secondary_link': 0.5,
+        'secondary': 0.2, 'secondary_link': 0.2,
         'tertiary': 0.8, 'tertiary_link': 0.8,
-        'unclassified': 1.0, 'residential': 0.8,
+        'unclassified': 1.0, 'residential': 0.5,
         'living_street': 0.9, 'service': 0.3,
     }
     return table.get(highway, 0.5)
@@ -105,17 +105,19 @@ def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
+    max_score = w_curve + w_road + w_nature
 
     for u, v, k, data in G.edges(data=True, keys=True):
-        # scores are summed (not normalized) so weights stack —
-        # default (1,1,1) gives scenic_score up to ~3, enough to overcome detour cost
         scenic_score = (
             w_curve * _curviness_score(data) +
             w_road * _road_type_score(data) +
             w_nature * _nature_score(data)
         )
         data['scenic_score'] = scenic_score
-        data['scenic_cost'] = data['travel_time'] / (1.0 + scenic_score)
+        # Exponential penalty: unscenic roads cost much more, scenic roads much less.
+        # Range: exp(2)≈7.4× for score=0 (highway) down to 1× for max scenic.
+        t = scenic_score / max_score if max_score > 0 else 0.0
+        data['scenic_cost'] = data['travel_time'] * math.exp(2.0 * (1.0 - t))
 
 
 def plan_route(G, start, end):
@@ -126,51 +128,16 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
 
-    def scenic_miles(route):
-        total = 0.0
-        for u, v in zip(route, route[1:]):
-            d = list(G[u][v].values())[0]
-            total += d.get('scenic_score', 0) * d.get('length', 0)
-        return total
-
-    candidates = []
-
-    # Dijkstra on scenic_cost — globally optimal cost path
     try:
-        dijk = networkx.shortest_path(G, start, end, weight='scenic_cost')
-        if networkx.path_weight(G, dijk, 'travel_time') <= fast_time * max_detour_factor:
-            candidates.append(dijk)
+        scenic_route = networkx.shortest_path(G, start, end, weight='scenic_cost')
     except (networkx.NetworkXNoPath, networkx.NodeNotFound):
-        pass
-
-    # Also try routing through the top scenic edge endpoints as waypoints.
-    # Dijkstra alone misses roads that require a detour to reach even when
-    # they have high scenic value (e.g. a curvy backroad off the main corridor).
-    top_edges = sorted(
-        G.edges(data=True, keys=True),
-        key=lambda e: e[3].get('scenic_score', 0) * e[3].get('length', 0),
-        reverse=True,
-    )[:10]
-
-    seen = set()
-    for u, v, k, data in top_edges:
-        for wp in (u, v):
-            if wp in (start, end) or wp in seen:
-                continue
-            seen.add(wp)
-            try:
-                leg1 = networkx.shortest_path(G, start, wp, weight='travel_time')
-                leg2 = networkx.shortest_path(G, wp, end, weight='travel_time')
-                route = leg1 + leg2[1:]
-                if networkx.path_weight(G, route, 'travel_time') <= fast_time * max_detour_factor:
-                    candidates.append(route)
-            except (networkx.NetworkXNoPath, networkx.NodeNotFound):
-                continue
-
-    if not candidates:
         return fast_route, fast_route
 
-    return fast_route, max(candidates, key=scenic_miles)
+    scenic_time = networkx.path_weight(G, scenic_route, weight='travel_time')
+    if scenic_time > fast_time * max_detour_factor:
+        return fast_route, fast_route
+
+    return fast_route, scenic_route
 
 
 def yen_k_shortest_routes(G, start, end, weight, k):
