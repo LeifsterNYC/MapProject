@@ -222,6 +222,36 @@
       width: 100% !important;
       border: none !important;
     }
+
+    /* ── Loading overlay ─────────────────────── */
+    #loading {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(240, 235, 224, 0.88);
+      z-index: 9999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.4rem;
+    }
+    #loading.active { display: flex; }
+
+    .spinner {
+      width: 36px; height: 36px;
+      border: 2px solid var(--border);
+      border-top-color: var(--ink);
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #loading-msg {
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
   </style>
 </head>
 
@@ -324,5 +354,26 @@
   </div>
   {% endif %}
 
+  <div id="loading">
+    <div class="spinner"></div>
+    <div id="loading-msg">Geocoding addresses...</div>
+  </div>
+
+  <script>
+    const stages = [
+      [0,    'Geocoding addresses\u2026'],
+      [3000,  'Fetching road network\u2026'],
+      [12000, 'Scoring scenic edges\u2026'],
+      [22000, 'Computing routes\u2026'],
+    ];
+    document.querySelector('form').addEventListener('submit', function() {
+      const overlay = document.getElementById('loading');
+      const msg = document.getElementById('loading-msg');
+      overlay.classList.add('active');
+      stages.forEach(([delay, text]) => {
+        setTimeout(() => { msg.textContent = text; }, delay);
+      });
+    });
+  </script>
 </body>
 </html>

@@ -28,7 +28,7 @@ def initialize_graph(start, end):
     e = max(start[1], end[1]) + buffer
     w = min(start[1], end[1]) - buffer
     private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
-    graph = osmnx.graph_from_bbox((w, s, e, n), simplify=False, network_type='drive', custom_filter=private_filter)
+    graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=private_filter)
     midpoint_lat = (n + s) / 2
     midpoint_lon = (e + w) / 2
     route_map = folium.Map(location=[midpoint_lat, midpoint_lon], zoom_start=10)
@@ -62,13 +62,15 @@ def _curviness_score(data):
     coords = list(geom.coords)
     if len(coords) < 2:
         return 0.0
-    dx = coords[-1][0] - coords[0][0]
-    dy = coords[-1][1] - coords[0][1]
-    straight_dist = math.sqrt(dx * dx + dy * dy) * 111320
+    dx = coords[-1][0] - coords[0][0]  # longitude diff
+    dy = coords[-1][1] - coords[0][1]  # latitude diff
+    lat_avg = (coords[0][1] + coords[-1][1]) / 2.0
+    meters_per_lon = 111320 * math.cos(math.radians(lat_avg))
+    straight_dist = math.sqrt((dx * meters_per_lon) ** 2 + (dy * 111320) ** 2)
     if straight_dist < 1:
         return 1.0
     sinuosity = length / straight_dist
-    return min(sinuosity - 1.0, 1.0)
+    return min(max(sinuosity - 1.0, 0.0), 1.0)
 
 
 def _road_type_score(data):
@@ -103,14 +105,15 @@ def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    total_w = w_curve + w_road + w_nature or 1.0
 
     for u, v, k, data in G.edges(data=True, keys=True):
+        # scores are summed (not normalized) so weights stack —
+        # default (1,1,1) gives scenic_score up to ~3, enough to overcome detour cost
         scenic_score = (
             w_curve * _curviness_score(data) +
             w_road * _road_type_score(data) +
             w_nature * _nature_score(data)
-        ) / total_w
+        )
         data['scenic_score'] = scenic_score
         data['scenic_cost'] = data['travel_time'] / (1.0 + scenic_score)
 
@@ -123,13 +126,8 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
 
-    def heuristic(u, v):
-        dlat = G.nodes[u]['y'] - G.nodes[v]['y']
-        dlon = G.nodes[u]['x'] - G.nodes[v]['x']
-        return math.sqrt(dlat ** 2 + dlon ** 2) * 69.0 / 65.0
-
     try:
-        scenic_route = networkx.astar_path(G, start, end, heuristic=heuristic, weight='scenic_cost')
+        scenic_route = networkx.shortest_path(G, start, end, weight='scenic_cost')
     except (networkx.NetworkXNoPath, networkx.NodeNotFound):
         return fast_route, fast_route
 
