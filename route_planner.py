@@ -126,16 +126,51 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
 
+    def scenic_miles(route):
+        total = 0.0
+        for u, v in zip(route, route[1:]):
+            d = list(G[u][v].values())[0]
+            total += d.get('scenic_score', 0) * d.get('length', 0)
+        return total
+
+    candidates = []
+
+    # Dijkstra on scenic_cost — globally optimal cost path
     try:
-        scenic_route = networkx.shortest_path(G, start, end, weight='scenic_cost')
+        dijk = networkx.shortest_path(G, start, end, weight='scenic_cost')
+        if networkx.path_weight(G, dijk, 'travel_time') <= fast_time * max_detour_factor:
+            candidates.append(dijk)
     except (networkx.NetworkXNoPath, networkx.NodeNotFound):
+        pass
+
+    # Also try routing through the top scenic edge endpoints as waypoints.
+    # Dijkstra alone misses roads that require a detour to reach even when
+    # they have high scenic value (e.g. a curvy backroad off the main corridor).
+    top_edges = sorted(
+        G.edges(data=True, keys=True),
+        key=lambda e: e[3].get('scenic_score', 0) * e[3].get('length', 0),
+        reverse=True,
+    )[:10]
+
+    seen = set()
+    for u, v, k, data in top_edges:
+        for wp in (u, v):
+            if wp in (start, end) or wp in seen:
+                continue
+            seen.add(wp)
+            try:
+                leg1 = networkx.shortest_path(G, start, wp, weight='travel_time')
+                leg2 = networkx.shortest_path(G, wp, end, weight='travel_time')
+                route = leg1 + leg2[1:]
+                if networkx.path_weight(G, route, 'travel_time') <= fast_time * max_detour_factor:
+                    candidates.append(route)
+            except (networkx.NetworkXNoPath, networkx.NodeNotFound):
+                continue
+
+    if not candidates:
         return fast_route, fast_route
 
-    scenic_time = networkx.path_weight(G, scenic_route, weight='travel_time')
-    if scenic_time > fast_time * max_detour_factor:
-        return fast_route, fast_route
-
-    return fast_route, scenic_route
+    return fast_route, max(candidates, key=scenic_miles)
 
 
 def yen_k_shortest_routes(G, start, end, weight, k):
