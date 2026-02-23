@@ -61,6 +61,15 @@ def initialize_graph(start, end):
                     speed = DEFAULT_SPEEDS.get(highway, 25)
                 data['maxspeed'] = speed
                 data['travel_time'] = data['length'] / 1609.34 / speed
+            # Fetch viewpoints/overlooks for proximity scoring
+            try:
+                vp_tags = {'tourism': ['viewpoint', 'attraction'], 'natural': ['peak', 'cliff']}
+                vp_gdf = osmnx.features_from_bbox((w, s, e, n), tags=vp_tags)
+                pts = vp_gdf.geometry.representative_point()
+                viewpoints = list(zip(pts.y, pts.x))
+            except Exception:
+                viewpoints = []
+            graph.graph['viewpoints'] = viewpoints
             os.makedirs(_CACHE_DIR, exist_ok=True)
             with open(cache_file, 'wb') as f:
                 pickle.dump(graph, f)
@@ -97,7 +106,7 @@ def _road_type_score(data):
     if isinstance(highway, list):
         highway = highway[0]
     table = {
-        'motorway': 0.0, 'trunk': 0.0, 'primary': 0.3,
+        'motorway': 0.15, 'trunk': 0.15, 'primary': 0.3,
         'motorway_link': 0.0, 'trunk_link': 0.0, 'primary_link': 0.1,
         'secondary': 0.4, 'secondary_link': 0.4,
         'tertiary': 0.8, 'tertiary_link': 0.8,
@@ -153,12 +162,34 @@ def _speed_score(data):
         return 0.2  # slow rural roads are fine; only urban arterials score 0
 
 
+def _view_score(data, viewpoints, proximity_m=300):
+    if not viewpoints:
+        return 0.0
+    geom = data.get('geometry')
+    if geom is not None:
+        coords = list(geom.coords)
+    else:
+        return 0.0
+    # Use midpoint of edge for proximity check
+    mid = coords[len(coords) // 2]
+    mid_lon, mid_lat = mid[0], mid[1]
+    lat_scale = 111320
+    lon_scale = 111320 * math.cos(math.radians(mid_lat))
+    for vp_lat, vp_lon in viewpoints:
+        dy = (vp_lat - mid_lat) * lat_scale
+        dx = (vp_lon - mid_lon) * lon_scale
+        if math.sqrt(dx*dx + dy*dy) < proximity_m:
+            return 1.0
+    return 0.0
+
+
 def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Speed and traffic are always included at weight 1.0.
-    max_score = w_curve + w_road + w_nature + 2.0
+    # Speed, traffic, and views are always included at weight 1.0.
+    max_score = w_curve + w_road + w_nature + 3.0
+    viewpoints = G.graph.get('viewpoints', [])
 
     for u, v, k, data in G.edges(data=True, keys=True):
         scenic_score = (
@@ -166,12 +197,14 @@ def score_scenic_edges(G, weights: dict) -> None:
             w_road * _road_type_score(data) +
             w_nature * _nature_score(data) +
             _speed_score(data) +
-            _traffic_score(data)
+            _traffic_score(data) +
+            _view_score(data, viewpoints)
         )
         data['scenic_score'] = scenic_score
-        # Exponential penalty: unscenic roads cost much more, scenic roads much less.
-        # Range: exp(2)≈7.4× for score=0 (highway) down to 1× for max scenic.
-        t = scenic_score / max_score if max_score > 0 else 0.0
+        # Normalize to [0,1] then apply exponential penalty.
+        # exp(2)≈7.4× for score=0 (highway), 1× for max scenic.
+        # Clamped so adding new scoring dimensions doesn't change the range.
+        t = min(scenic_score / max_score, 1.0) if max_score > 0 else 0.0
         data['scenic_cost'] = data['travel_time'] * math.exp(2.0 * (1.0 - t))
 
 
