@@ -4,7 +4,12 @@ import folium
 import math
 import heapq
 import copy
+import os
+import pickle
 from collections import defaultdict
+
+_GRAPH_CACHE: dict = {}
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
 
 # osmnx.config(
 #     db_host='localhost',
@@ -27,30 +32,44 @@ def initialize_graph(start, end):
     s = min(start[0], end[0]) - buffer
     e = max(start[1], end[1]) + buffer
     w = min(start[1], end[1]) - buffer
-    private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
-    graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=private_filter)
+
+    # Round to 2 decimal places (~1 km) so nearby routes share a cache entry.
+    bbox_key = (round(n, 2), round(s, 2), round(e, 2), round(w, 2))
+
+    if bbox_key not in _GRAPH_CACHE:
+        cache_file = os.path.join(_CACHE_DIR, f'graph_{bbox_key}.pkl')
+        if os.path.exists(cache_file):
+            with open(cache_file, 'rb') as f:
+                graph = pickle.load(f)
+        else:
+            private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
+            graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=private_filter)
+            for u, v, k, data in graph.edges(data=True, keys=True):
+                highway = data.get('highway', 'residential')
+                if isinstance(highway, list):
+                    highway = highway[0]
+                speed = None
+                raw = data.get('maxspeed')
+                if isinstance(raw, str):
+                    try:
+                        speed = float(raw.split()[0])
+                    except (ValueError, IndexError):
+                        speed = None
+                elif isinstance(raw, (int, float)):
+                    speed = float(raw)
+                if not speed or speed <= 0:
+                    speed = DEFAULT_SPEEDS.get(highway, 25)
+                data['maxspeed'] = speed
+                data['travel_time'] = data['length'] / 1609.34 / speed
+            os.makedirs(_CACHE_DIR, exist_ok=True)
+            with open(cache_file, 'wb') as f:
+                pickle.dump(graph, f)
+        _GRAPH_CACHE[bbox_key] = graph
+
+    graph = _GRAPH_CACHE[bbox_key]
     midpoint_lat = (n + s) / 2
     midpoint_lon = (e + w) / 2
     route_map = folium.Map(location=[midpoint_lat, midpoint_lon], zoom_start=10)
-
-    for u, v, k, data in graph.edges(data=True, keys=True):
-        highway = data.get('highway', 'residential')
-        if isinstance(highway, list):
-            highway = highway[0]
-        speed = None
-        raw = data.get('maxspeed')
-        if isinstance(raw, str):
-            try:
-                speed = float(raw.split()[0])
-            except (ValueError, IndexError):
-                speed = None
-        elif isinstance(raw, (int, float)):
-            speed = float(raw)
-        if not speed or speed <= 0:
-            speed = DEFAULT_SPEEDS.get(highway, 25)
-        data['maxspeed'] = speed
-        data['travel_time'] = data['length'] / 1609.34 / speed
-
     return graph, route_map
 
 
@@ -112,9 +131,9 @@ def _speed_score(data):
     elif speed >= 45:
         return 0.8
     elif speed >= 35:
-        return 0.4
+        return 0.5
     else:
-        return 0.0
+        return 0.2  # slow rural roads are fine; only urban arterials score 0
 
 
 def score_scenic_edges(G, weights: dict) -> None:
