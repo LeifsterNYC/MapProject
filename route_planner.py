@@ -120,6 +120,23 @@ def _nature_score(data):
     return min(score, 1.0)
 
 
+def _traffic_score(data):
+    lanes = data.get('lanes')
+    if lanes is None:
+        # No lanes tag: almost certainly a quiet single-lane country road
+        return 0.4
+    try:
+        n = int(lanes) if not isinstance(lanes, list) else int(lanes[0])
+    except (ValueError, TypeError):
+        return 0.2
+    if n <= 1:
+        return 0.5
+    elif n == 2:
+        return 0.2
+    else:
+        return 0.0  # 3+ lanes = busy road
+
+
 def _speed_score(data):
     speed = data.get('maxspeed', 35)
     # Peaks at 45-55 mph (open country road). Penalizes slow urban roads and
@@ -140,15 +157,16 @@ def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Speed is always included at weight 1.0 — open-road feel is not optional.
-    max_score = w_curve + w_road + w_nature + 1.0
+    # Speed and traffic are always included at weight 1.0.
+    max_score = w_curve + w_road + w_nature + 2.0
 
     for u, v, k, data in G.edges(data=True, keys=True):
         scenic_score = (
             w_curve * _curviness_score(data) +
             w_road * _road_type_score(data) +
             w_nature * _nature_score(data) +
-            _speed_score(data)
+            _speed_score(data) +
+            _traffic_score(data)
         )
         data['scenic_score'] = scenic_score
         # Exponential penalty: unscenic roads cost much more, scenic roads much less.
