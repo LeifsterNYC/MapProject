@@ -29,7 +29,6 @@ def initialize_graph(start, end):
     w = min(start[1], end[1]) - buffer
     private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
     graph = osmnx.graph_from_bbox((w, s, e, n), simplify=False, network_type='drive', custom_filter=private_filter)
-    osmnx.plot_graph(graph)
     midpoint_lat = (n + s) / 2
     midpoint_lon = (e + w) / 2
     route_map = folium.Map(location=[midpoint_lat, midpoint_lon], zoom_start=10)
@@ -117,9 +116,7 @@ def score_scenic_edges(G, weights: dict) -> None:
 
 
 def plan_route(G, start, end):
-    route = networkx.shortest_path(G, start, end, weight="travel_time")
-    osmnx.plot_graph_route(G, route)
-    return route
+    return networkx.shortest_path(G, start, end, weight="travel_time")
 
 
 def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
