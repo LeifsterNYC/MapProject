@@ -27,9 +27,8 @@ def initialize_graph(start, end):
     s = min(start[0], end[0]) - buffer
     e = max(start[1], end[1]) + buffer
     w = min(start[1], end[1]) - buffer
-    box = [n, s, e, w]
     private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
-    graph = osmnx.graph_from_bbox(*box, simplify=False, network_type='drive', custom_filter=private_filter)
+    graph = osmnx.graph_from_bbox((w, s, e, n), simplify=False, network_type='drive', custom_filter=private_filter)
     osmnx.plot_graph(graph)
     midpoint_lat = (n + s) / 2
     midpoint_lon = (e + w) / 2
