@@ -20,7 +20,7 @@ def index():
         curviness_weight = float(request.form.get('curviness_weight', 1.0))
         nature_weight = float(request.form.get('nature_weight', 1.0))
         road_type_weight = float(request.form.get('road_type_weight', 1.0))
-        max_detour = float(request.form.get('max_detour', 1.5))
+        max_detour = float(request.form.get('max_detour', 2.0))
 
         print(start_address)
         print(end_address)
@@ -88,7 +88,7 @@ def index():
         curviness_weight=1.0,
         nature_weight=1.0,
         road_type_weight=1.0,
-        max_detour=1.5,
+        max_detour=2.0,
     )
 
 if __name__ == '__main__':

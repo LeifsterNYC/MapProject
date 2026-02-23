@@ -78,12 +78,12 @@ def _road_type_score(data):
     if isinstance(highway, list):
         highway = highway[0]
     table = {
-        'motorway': 0.0, 'trunk': 0.05, 'primary': 0.2,
-        'motorway_link': 0.0, 'trunk_link': 0.05, 'primary_link': 0.2,
+        'motorway': 0.0, 'trunk': 0.0, 'primary': 0.05,
+        'motorway_link': 0.0, 'trunk_link': 0.0, 'primary_link': 0.05,
         'secondary': 0.5, 'secondary_link': 0.5,
-        'tertiary': 0.75, 'tertiary_link': 0.75,
-        'unclassified': 0.9, 'residential': 0.7,
-        'living_street': 0.8, 'service': 0.4,
+        'tertiary': 0.8, 'tertiary_link': 0.8,
+        'unclassified': 1.0, 'residential': 0.8,
+        'living_street': 0.9, 'service': 0.3,
     }
     return table.get(highway, 0.5)
 
