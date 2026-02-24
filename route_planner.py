@@ -61,6 +61,13 @@ def initialize_graph(start, end):
                     speed = DEFAULT_SPEEDS.get(highway, 25)
                 data['maxspeed'] = speed
                 data['travel_time'] = data['length'] / 1609.34 / speed
+            # Add ~35-second delay at signalized intersections.
+            # OSMnx preserves highway=traffic_signals on intersection nodes.
+            SIGNAL_DELAY_HR = 35 / 3600
+            for node, ndata in graph.nodes(data=True):
+                if ndata.get('highway') == 'traffic_signals':
+                    for _, _, edata in graph.in_edges(node, data=True):
+                        edata['travel_time'] = edata.get('travel_time', 0) + SIGNAL_DELAY_HR
             # Fetch water bodies for proximity scoring (rivers/lakes = scenic roads nearby).
             # Collect shoreline/centerline vertices so roads along rivers score correctly.
             # (representative_point lands in the middle of wide rivers, too far from shore.)
