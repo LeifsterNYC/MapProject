@@ -54,15 +54,14 @@ def _compute_route(start_address, end_address, curviness_weight, nature_weight, 
     score_scenic_edges(graph, {'curviness': curviness_weight, 'road_type': road_type_weight, 'nature': nature_weight})
 
     emit('Computing routes...')
-    fast_route, scenic_route = plan_scenic_route(graph, start_node, end_node, max_detour)
-
+    fast_route, scenic_route, fast_min, scenic_min = plan_scenic_route(graph, start_node, end_node, max_detour)
     fast_coords = [(graph.nodes[n]['y'], graph.nodes[n]['x']) for n in fast_route]
     scenic_coords = [(graph.nodes[n]['y'], graph.nodes[n]['x']) for n in scenic_route]
     folium.PolyLine(fast_coords, color="blue", weight=3, opacity=0.6, tooltip="Fastest").add_to(route_map)
     folium.PolyLine(scenic_coords, color="green", weight=4, opacity=0.9, tooltip="Scenic").add_to(route_map)
     folium.Marker(location=list(start_coords), popup=start_address).add_to(route_map)
     folium.Marker(location=list(end_coords), popup=end_address).add_to(route_map)
-    return distance, route_map._repr_html_(), _gmaps_url(fast_coords), _gmaps_url(scenic_coords)
+    return distance, route_map._repr_html_(), _gmaps_url(fast_coords), _gmaps_url(scenic_coords), fast_min, scenic_min
 
 
 @app.route('/stream')
@@ -106,7 +105,7 @@ def stream():
             score_scenic_edges(graph, {'curviness': curviness_weight, 'road_type': road_type_weight, 'nature': nature_weight})
 
             yield event({'stage': 'Computing routes...'})
-            fast_route, scenic_route = plan_scenic_route(graph, start_node, end_node, max_detour)
+            fast_route, scenic_route, fast_min, scenic_min = plan_scenic_route(graph, start_node, end_node, max_detour)
 
             fast_coords = [(graph.nodes[n]['y'], graph.nodes[n]['x']) for n in fast_route]
             scenic_coords = [(graph.nodes[n]['y'], graph.nodes[n]['x']) for n in scenic_route]
@@ -120,6 +119,7 @@ def stream():
                 distance=distance, route_map=map_html,
                 fast_gmaps=_gmaps_url(fast_coords),
                 scenic_gmaps=_gmaps_url(scenic_coords),
+                fast_min=fast_min, scenic_min=scenic_min,
                 curviness_weight=curviness_weight, nature_weight=nature_weight,
                 road_type_weight=road_type_weight, max_detour=max_detour)
 
@@ -146,7 +146,7 @@ def index():
         max_detour = float(request.form.get('max_detour', 3.0))
 
         try:
-            distance, map_html, fast_gmaps, scenic_gmaps = _compute_route(
+            distance, map_html, fast_gmaps, scenic_gmaps, fast_min, scenic_min = _compute_route(
                 start_address, end_address,
                 curviness_weight, nature_weight, road_type_weight, max_detour,
                 emit=lambda s: None,
@@ -159,6 +159,7 @@ def index():
         return render_template('index.html',
             distance=distance, route_map=map_html,
             fast_gmaps=fast_gmaps, scenic_gmaps=scenic_gmaps,
+            fast_min=fast_min, scenic_min=scenic_min,
             curviness_weight=curviness_weight, nature_weight=nature_weight,
             road_type_weight=road_type_weight, max_detour=max_detour)
 

@@ -206,6 +206,28 @@
     }
     .dist strong { color: var(--ink); font-weight: 500; }
 
+    .times {
+      display: flex;
+      gap: 2rem;
+      font-size: 0.72rem;
+    }
+    .time-item { display: flex; flex-direction: column; gap: 0.15rem; }
+    .time-label {
+      font-size: 0.55rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .time-val { font-weight: 500; }
+    .time-val.fast   { color: var(--blue); }
+    .time-val.scenic { color: var(--green); }
+    .time-note {
+      font-size: 0.6rem;
+      color: var(--muted);
+      align-self: flex-end;
+      padding-bottom: 0.1rem;
+    }
+
     /* ── Map ─────────────────────────────────── */
     #map-wrap {
       padding: 1.8rem 2.5rem 0;
@@ -356,10 +378,21 @@
 
     <div class="action-row">
       <button type="submit">Find Route</button>
+      {% if fast_min is defined and fast_min %}
+      <div class="times">
+        <div class="time-item">
+          <span class="time-label">Fastest</span>
+          <span class="time-val fast">{{ "%d"|format(fast_min|int) }} min</span>
+        </div>
+        <div class="time-item">
+          <span class="time-label">Scenic</span>
+          <span class="time-val scenic">{{ "%d"|format(scenic_min|int) }} min</span>
+        </div>
+        <span class="time-note">est. · speed-limit only</span>
+      </div>
+      {% endif %}
       {% if distance %}
-      <span class="dist">
-        straight-line &mdash; <strong>{{ "%.1f"|format(distance) }} mi</strong>
-      </span>
+      <span class="dist">{{ "%.1f"|format(distance) }} mi straight-line</span>
       {% endif %}
       {% if error %}
       <span class="dist" style="color:#8b2020">{{ error }}</span>

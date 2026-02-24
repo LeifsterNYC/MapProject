@@ -253,19 +253,20 @@ def plan_route(G, start, end):
 
 
 def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
+    """Returns (fast_route, scenic_route, fast_minutes, scenic_minutes)."""
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
 
     try:
         scenic_route = networkx.shortest_path(G, start, end, weight='scenic_cost')
     except (networkx.NetworkXNoPath, networkx.NodeNotFound):
-        return fast_route, fast_route
+        return fast_route, fast_route, fast_time * 60, fast_time * 60
 
     scenic_time = networkx.path_weight(G, scenic_route, weight='travel_time')
     if scenic_time > fast_time * max_detour_factor:
-        return fast_route, fast_route
+        return fast_route, fast_route, fast_time * 60, fast_time * 60
 
-    return fast_route, scenic_route
+    return fast_route, scenic_route, fast_time * 60, scenic_time * 60
 
 
 def yen_k_shortest_routes(G, start, end, weight, k):
