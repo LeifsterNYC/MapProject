@@ -16,7 +16,7 @@ from scipy.spatial import KDTree
 from route_planner import initialize_graph, score_scenic_edges, plan_scenic_route
 
 app = Flask(__name__)
-geolocator = Nominatim(user_agent="scenic_route_app")
+geolocator = Nominatim(user_agent="ramble_app")
 DEFAULT_START = "312 Thurston Ave, Ithaca, NY 14850"
 DEFAULT_END = "1781 Taughannock Blvd, Ulysses, NY 14886"
 MAX_DISTANCE_MILES = 50
