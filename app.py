@@ -14,6 +14,25 @@ DEFAULT_END = "1781 Taughannock Blvd, Ulysses, NY 14886"
 MAX_DISTANCE_MILES = 50
 
 
+def _gmaps_url(coords, max_waypoints=8):
+    """Build a Google Maps directions URL from a list of (lat, lon) coords."""
+    if len(coords) < 2:
+        return None
+    origin = f"{coords[0][0]:.6f},{coords[0][1]:.6f}"
+    destination = f"{coords[-1][0]:.6f},{coords[-1][1]:.6f}"
+    intermediate = coords[1:-1]
+    if len(intermediate) > max_waypoints:
+        # Evenly sample to stay within the waypoint limit
+        step = (len(intermediate) - 1) / (max_waypoints - 1)
+        intermediate = [intermediate[round(i * step)] for i in range(max_waypoints)]
+    waypoints = '|'.join(f"{lat:.6f},{lon:.6f}" for lat, lon in intermediate)
+    url = (f"https://www.google.com/maps/dir/?api=1"
+           f"&origin={origin}&destination={destination}&travelmode=driving")
+    if waypoints:
+        url += f"&waypoints={waypoints}"
+    return url
+
+
 def _compute_route(start_address, end_address, curviness_weight, nature_weight, road_type_weight, max_detour, emit):
     """Run the full pipeline, calling emit(stage_str) at each step. Returns render_template result."""
     emit('Geocoding addresses...')
@@ -43,8 +62,7 @@ def _compute_route(start_address, end_address, curviness_weight, nature_weight, 
     folium.PolyLine(scenic_coords, color="green", weight=4, opacity=0.9, tooltip="Scenic").add_to(route_map)
     folium.Marker(location=list(start_coords), popup=start_address).add_to(route_map)
     folium.Marker(location=list(end_coords), popup=end_address).add_to(route_map)
-
-    return distance, route_map._repr_html_()
+    return distance, route_map._repr_html_(), _gmaps_url(fast_coords), _gmaps_url(scenic_coords)
 
 
 @app.route('/stream')
@@ -100,6 +118,8 @@ def stream():
 
             html = render_template('index.html',
                 distance=distance, route_map=map_html,
+                fast_gmaps=_gmaps_url(fast_coords),
+                scenic_gmaps=_gmaps_url(scenic_coords),
                 curviness_weight=curviness_weight, nature_weight=nature_weight,
                 road_type_weight=road_type_weight, max_detour=max_detour)
 
@@ -126,7 +146,7 @@ def index():
         max_detour = float(request.form.get('max_detour', 3.0))
 
         try:
-            distance, map_html = _compute_route(
+            distance, map_html, fast_gmaps, scenic_gmaps = _compute_route(
                 start_address, end_address,
                 curviness_weight, nature_weight, road_type_weight, max_detour,
                 emit=lambda s: None,
@@ -138,6 +158,7 @@ def index():
 
         return render_template('index.html',
             distance=distance, route_map=map_html,
+            fast_gmaps=fast_gmaps, scenic_gmaps=scenic_gmaps,
             curviness_weight=curviness_weight, nature_weight=nature_weight,
             road_type_weight=road_type_weight, max_detour=max_detour)
 
@@ -147,4 +168,4 @@ def index():
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5001, use_reloader=False, threaded=False)

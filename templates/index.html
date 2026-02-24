@@ -208,8 +208,30 @@
 
     /* ── Map ─────────────────────────────────── */
     #map-wrap {
-      padding: 1.8rem 2.5rem 2.5rem;
+      padding: 1.8rem 2.5rem 0;
     }
+
+    .gmaps-row {
+      display: flex;
+      gap: 1rem;
+      padding: 1rem 2.5rem 2.5rem;
+    }
+
+    .gmaps-btn {
+      display: inline-block;
+      padding: 0.45rem 1.4rem;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.66rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      text-decoration: none;
+      border: 1.5px solid var(--ink);
+      color: var(--ink);
+      transition: background 0.18s, color 0.18s;
+    }
+    .gmaps-btn:hover { background: var(--ink); color: var(--bg); }
+    .gmaps-btn.scenic { border-color: var(--green); color: var(--green); }
+    .gmaps-btn.scenic:hover { background: var(--green); color: var(--bg); }
 
     #map-frame {
       border: 1px solid var(--border);
@@ -351,6 +373,18 @@
     <div id="map-frame">
       {{ route_map|safe }}
     </div>
+  </div>
+  <div class="gmaps-row">
+    {% if scenic_gmaps %}
+    <a class="gmaps-btn scenic" href="{{ scenic_gmaps }}" target="_blank" rel="noopener">
+      Open Scenic in Google Maps
+    </a>
+    {% endif %}
+    {% if fast_gmaps %}
+    <a class="gmaps-btn" href="{{ fast_gmaps }}" target="_blank" rel="noopener">
+      Open Fastest in Google Maps
+    </a>
+    {% endif %}
   </div>
   {% endif %}
 
