@@ -177,6 +177,46 @@
       cursor: pointer;
     }
 
+    /* ── TomTom toggle row ───────────────────── */
+    .tomtom-row {
+      padding: 0.65rem 2.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .toggle-label {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-label input[type=checkbox] {
+      accent-color: var(--ink);
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+    }
+
+    .tomtom-badge {
+      font-size: 0.55rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--bg);
+      background: #c0392b;
+      padding: 0.15rem 0.45rem;
+      border-radius: 2px;
+    }
+
+    .closure-note {
+      font-size: 0.62rem;
+      color: #c0392b;
+      letter-spacing: 0.08em;
+    }
+
     /* ── Submit bar ──────────────────────────── */
     .action-row {
       display: flex;
@@ -376,6 +416,17 @@
       </div>
     </div>
 
+    {% if has_tomtom %}
+    <div class="tomtom-row">
+      <label class="toggle-label">
+        <input type="checkbox" name="use_tomtom" value="1"
+               {% if use_tomtom %}checked{% endif %}>
+        Avoid real-time road closures
+        <span class="tomtom-badge">TomTom</span>
+      </label>
+    </div>
+    {% endif %}
+
     <div class="action-row">
       <button type="submit">Find Route</button>
       {% if fast_min is defined and fast_min %}
@@ -393,6 +444,9 @@
       {% endif %}
       {% if distance %}
       <span class="dist">{{ "%.1f"|format(distance) }} mi straight-line</span>
+      {% endif %}
+      {% if has_tomtom and use_tomtom and closure_count %}
+      <span class="closure-note">{{ closure_count }} road segment{{ 's' if closure_count != 1 else '' }} blocked</span>
       {% endif %}
       {% if error %}
       <span class="dist" style="color:#8b2020">{{ error }}</span>

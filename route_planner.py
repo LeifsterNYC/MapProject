@@ -9,7 +9,7 @@ from scipy.spatial import KDTree
 
 _GRAPH_CACHE: dict = {}
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
-_CACHE_VERSION = 3  # Bump to invalidate all on-disk caches when fetched data changes.
+_CACHE_VERSION = 4  # Bump to invalidate all on-disk caches when fetched data changes.
 _SIGNAL_DELAY_HR = 35 / 3600  # 35-second stop penalty at signalized intersections.
 
 DEFAULT_SPEEDS = {
@@ -110,6 +110,41 @@ def initialize_graph(start, end):
                 viewpoints = []
             graph.graph['viewpoints'] = viewpoints
 
+            # Fetch natural areas (forests, parks, meadows) for proximity scoring.
+            try:
+                nature_gdf = osmnx.features_from_bbox(
+                    (w, s, e, n),
+                    tags={
+                        'natural': ['wood', 'scrub', 'heath', 'grassland'],
+                        'landuse': ['forest', 'meadow', 'grass', 'village_green', 'recreation_ground'],
+                        'leisure': ['park', 'nature_reserve'],
+                    }
+                )
+                nature_points = []
+                for geom in nature_gdf.geometry:
+                    if geom is None:
+                        continue
+                    try:
+                        if hasattr(geom, 'exterior'):
+                            geom_coords = list(geom.exterior.coords)
+                        elif hasattr(geom, 'coords'):
+                            geom_coords = list(geom.coords)
+                        elif hasattr(geom, 'geoms'):
+                            geom_coords = []
+                            for part in geom.geoms:
+                                if hasattr(part, 'exterior'):
+                                    geom_coords.extend(part.exterior.coords)
+                                elif hasattr(part, 'coords'):
+                                    geom_coords.extend(part.coords)
+                        else:
+                            geom_coords = []
+                        nature_points.extend((y, x) for x, y in geom_coords[::4])
+                    except Exception:
+                        continue
+            except Exception:
+                nature_points = []
+            graph.graph['nature_points'] = nature_points
+
             os.makedirs(_CACHE_DIR, exist_ok=True)
             with open(cache_file, 'wb') as f:
                 pickle.dump(graph, f)
@@ -155,18 +190,6 @@ def _road_type_score(data):
     return table.get(highway, 0.4)
 
 
-def _nature_score(data):
-    score = 0.0
-    if data.get('route') == 'scenic':
-        score += 0.6
-    if data.get('tourism') in ('viewpoint', 'attraction'):
-        score += 0.4
-    if data.get('natural') in ('wood', 'water', 'coastline'):
-        score += 0.3
-    if data.get('landuse') in ('forest', 'meadow'):
-        score += 0.2
-    return min(score, 1.0)
-
 
 def _traffic_score(data):
     lanes = data.get('lanes')
@@ -211,11 +234,12 @@ def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Speed, traffic, water, and viewpoints are always included at fixed weights.
-    max_score = w_curve + w_road + w_nature + 3.5
+    # Fixed components: speed(1.0) + traffic(0.5) + water(1.0) + view(0.5) = 3.0
+    max_score = w_curve + w_road + w_nature + 3.0
 
     water_points = G.graph.get('water_points', [])
     viewpoints = G.graph.get('viewpoints', [])
+    nature_points = G.graph.get('nature_points', [])
 
     # Project to metres using a single reference latitude (error < 0.5% over 50-mile bbox).
     ref_lat = sum(d.get('y', 0) for _, d in list(G.nodes(data=True))[:200]) / 200
@@ -224,12 +248,14 @@ def score_scenic_edges(G, weights: dict) -> None:
 
     water_tree = _make_tree(water_points, lat_m, lon_m)
     view_tree = _make_tree(viewpoints, lat_m, lon_m)
+    nature_tree = _make_tree(nature_points, lat_m, lon_m)
 
-    def near(tree, lat, lon, radius):
+    def near_score(tree, lat, lon, radius):
+        """Gradient proximity score: 1.0 at distance 0, 0.0 at distance >= radius."""
         if tree is None:
-            return False
+            return 0.0
         dist, _ = tree.query([lat * lat_m, lon * lon_m])
-        return dist < radius
+        return max(0.0, 1.0 - dist / radius)
 
     for u, v, k, data in G.edges(data=True, keys=True):
         geom = data.get('geometry')
@@ -241,13 +267,14 @@ def score_scenic_edges(G, weights: dict) -> None:
             mid_lat = (G.nodes[u]['y'] + G.nodes[v]['y']) / 2
             mid_lon = (G.nodes[u]['x'] + G.nodes[v]['x']) / 2
 
-        water = 1.0 if near(water_tree, mid_lat, mid_lon, 400) else 0.0
-        view = 0.5 if near(view_tree, mid_lat, mid_lon, 200) else 0.0
+        water  = near_score(water_tree,  mid_lat, mid_lon, 400)        # [0.0, 1.0]
+        view   = near_score(view_tree,   mid_lat, mid_lon, 200) * 0.5  # [0.0, 0.5]
+        nature = near_score(nature_tree, mid_lat, mid_lon, 150)        # [0.0, 1.0]
 
         scenic_score = (
-            w_curve * _curviness_score(data) +
-            w_road * _road_type_score(data) +
-            w_nature * _nature_score(data) +
+            w_curve  * _curviness_score(data) +
+            w_road   * _road_type_score(data) +
+            w_nature * nature +
             _speed_score(data) +
             _traffic_score(data) +
             water +
