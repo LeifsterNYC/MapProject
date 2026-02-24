@@ -61,9 +61,41 @@ def initialize_graph(start, end):
                     speed = DEFAULT_SPEEDS.get(highway, 25)
                 data['maxspeed'] = speed
                 data['travel_time'] = data['length'] / 1609.34 / speed
-            # Fetch viewpoints/overlooks for proximity scoring
+            # Fetch water bodies for proximity scoring (rivers/lakes = scenic roads nearby).
+            # Collect shoreline/centerline vertices so roads along rivers score correctly.
+            # (representative_point lands in the middle of wide rivers, too far from shore.)
             try:
-                vp_tags = {'tourism': ['viewpoint', 'attraction'], 'natural': ['peak', 'cliff']}
+                water_tags = {'natural': 'water', 'waterway': ['river', 'stream']}
+                water_gdf = osmnx.features_from_bbox((w, s, e, n), tags=water_tags)
+                water_points = []
+                for geom in water_gdf.geometry:
+                    if geom is None:
+                        continue
+                    try:
+                        if hasattr(geom, 'exterior'):      # Polygon
+                            raw = list(geom.exterior.coords)
+                        elif hasattr(geom, 'coords'):      # LineString / Point
+                            raw = list(geom.coords)
+                        elif hasattr(geom, 'geoms'):       # Multi* / GeometryCollection
+                            raw = []
+                            for part in geom.geoms:
+                                if hasattr(part, 'exterior'):
+                                    raw.extend(part.exterior.coords)
+                                elif hasattr(part, 'coords'):
+                                    raw.extend(part.coords)
+                        else:
+                            raw = []
+                        # coords are (lon, lat); subsample every 4th vertex
+                        water_points.extend((y, x) for x, y in raw[::4])
+                    except Exception:
+                        continue
+            except Exception:
+                water_points = []
+            graph.graph['water_points'] = water_points
+            # Fetch roadside viewpoints/scenic stops (tourism=viewpoint only — not peaks,
+            # which are on mountain tops far from roads).
+            try:
+                vp_tags = {'tourism': ['viewpoint', 'scenic_viewpoint']}
                 vp_gdf = osmnx.features_from_bbox((w, s, e, n), tags=vp_tags)
                 pts = vp_gdf.geometry.representative_point()
                 viewpoints = list(zip(pts.y, pts.x))
@@ -162,50 +194,58 @@ def _speed_score(data):
         return 0.2  # slow rural roads are fine; only urban arterials score 0
 
 
-def _view_score(data, viewpoints, proximity_m=300):
-    if not viewpoints:
-        return 0.0
-    geom = data.get('geometry')
-    if geom is not None:
-        coords = list(geom.coords)
-    else:
-        return 0.0
-    # Use midpoint of edge for proximity check
-    mid = coords[len(coords) // 2]
-    mid_lon, mid_lat = mid[0], mid[1]
+def _near_feature(mid_lat, mid_lon, points, proximity_m):
+    """Return True if any point in `points` is within proximity_m meters of (mid_lat, mid_lon)."""
     lat_scale = 111320
     lon_scale = 111320 * math.cos(math.radians(mid_lat))
-    for vp_lat, vp_lon in viewpoints:
-        dy = (vp_lat - mid_lat) * lat_scale
-        dx = (vp_lon - mid_lon) * lon_scale
+    for pt_lat, pt_lon in points:
+        dy = (pt_lat - mid_lat) * lat_scale
+        dx = (pt_lon - mid_lon) * lon_scale
         if math.sqrt(dx*dx + dy*dy) < proximity_m:
-            return 1.0
-    return 0.0
+            return True
+    return False
 
 
 def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Speed, traffic, and views are always included at weight 1.0.
-    max_score = w_curve + w_road + w_nature + 3.0
+    # Speed, traffic, water proximity, and viewpoints are always included at fixed weights.
+    max_score = w_curve + w_road + w_nature + 3.5  # +0.5 for viewpoint bonus
+    water_points = G.graph.get('water_points', [])
     viewpoints = G.graph.get('viewpoints', [])
 
     for u, v, k, data in G.edges(data=True, keys=True):
+        # Compute edge midpoint — use geometry if available, else average endpoints.
+        geom = data.get('geometry')
+        if geom is not None:
+            coords = list(geom.coords)
+            mid = coords[len(coords) // 2]
+            mid_lon, mid_lat = mid[0], mid[1]
+        else:
+            mid_lat = (G.nodes[u]['y'] + G.nodes[v]['y']) / 2
+            mid_lon = (G.nodes[u]['x'] + G.nodes[v]['x']) / 2
+
+        # Roads within 400m of a river/lake get +1.0.
+        water = 1.0 if _near_feature(mid_lat, mid_lon, water_points, proximity_m=400) else 0.0
+        # Roads within 200m of a roadside viewpoint/scenic stop get +0.5.
+        view = 0.5 if _near_feature(mid_lat, mid_lon, viewpoints, proximity_m=200) else 0.0
+
         scenic_score = (
             w_curve * _curviness_score(data) +
             w_road * _road_type_score(data) +
             w_nature * _nature_score(data) +
             _speed_score(data) +
             _traffic_score(data) +
-            _view_score(data, viewpoints)
+            water +
+            view
         )
         data['scenic_score'] = scenic_score
         # Normalize to [0,1] then apply exponential penalty.
         # exp(2)≈7.4× for score=0 (highway), 1× for max scenic.
         # Clamped so adding new scoring dimensions doesn't change the range.
         t = min(scenic_score / max_score, 1.0) if max_score > 0 else 0.0
-        data['scenic_cost'] = data['travel_time'] * math.exp(2.0 * (1.0 - t))
+        data['scenic_cost'] = data['travel_time'] * math.exp(3.0 * (1.0 - t))
 
 
 def plan_route(G, start, end):
