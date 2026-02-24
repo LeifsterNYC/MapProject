@@ -4,19 +4,56 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scenic Route</title>
+  <!-- Anti-FOUC: apply saved theme before first paint -->
+  <script>
+    (function(){
+      var t = localStorage.getItem('scenic-theme');
+      if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
+    /* ── Themes ──────────────────────────────── */
     :root {
-      --bg:           #f0ebe0;
-      --input-bg:     #faf8f3;
-      --border:       #c4b99a;
-      --border-dark:  #8a7a5e;
-      --ink:          #1a2618;
-      --muted:        #6b6252;
-      --green:        #2d5c27;
-      --blue:         #1a3c60;
+      --bg:          #f0ebe0;
+      --input-bg:    #faf8f3;
+      --border:      #c4b99a;
+      --border-dark: #8a7a5e;
+      --ink:         #1a2618;
+      --muted:       #6b6252;
+      --green:       #2d5c27;
+      --blue:        #1a3c60;
+      --overlay-bg:  rgba(240, 235, 224, 0.92);
+      --grid-v:      rgba(139, 119, 78, 0.055);
+      --grid-h:      rgba(139, 119, 78, 0.04);
+    }
+
+    [data-theme="dark"] {
+      --bg:          #161410;
+      --input-bg:    #1d1b13;
+      --border:      #312c1b;
+      --border-dark: #4e4535;
+      --ink:         #d9cfb5;
+      --muted:       #6d6350;
+      --green:       #5c9e52;
+      --blue:        #3a6aaa;
+      --overlay-bg:  rgba(16, 15, 11, 0.93);
+      --grid-v:      rgba(190, 175, 130, 0.038);
+      --grid-h:      rgba(190, 175, 130, 0.026);
+    }
+
+    /* Smooth transitions only when user deliberately toggles */
+    .theme-transitions,
+    .theme-transitions *,
+    .theme-transitions *::before,
+    .theme-transitions *::after {
+      transition:
+        background-color 0.32s ease,
+        color            0.22s ease,
+        border-color     0.32s ease !important;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,10 +64,10 @@
       background-image:
         repeating-linear-gradient(0deg,
           transparent, transparent 35px,
-          rgba(139,119,78,.055) 35px, rgba(139,119,78,.055) 36px),
+          var(--grid-v) 35px, var(--grid-v) 36px),
         repeating-linear-gradient(90deg,
           transparent, transparent 35px,
-          rgba(139,119,78,.04) 35px, rgba(139,119,78,.04) 36px);
+          var(--grid-h) 35px, var(--grid-h) 36px);
       font-family: 'IBM Plex Mono', monospace;
       color: var(--ink);
     }
@@ -38,10 +75,16 @@
     /* ── Header ─────────────────────────────── */
     header {
       display: flex;
-      align-items: baseline;
+      align-items: center;
       gap: 2rem;
       padding: 1.5rem 2.5rem 1.1rem;
       border-bottom: 2px solid var(--ink);
+    }
+
+    .wordmark-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 0.18rem;
     }
 
     .wordmark {
@@ -65,8 +108,14 @@
       color: var(--muted);
     }
 
-    .legend {
+    .header-right {
       margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 1.6rem;
+    }
+
+    .legend {
       display: flex;
       align-items: center;
       gap: 1.4rem;
@@ -77,11 +126,27 @@
 
     .legend-item { display: flex; align-items: center; gap: 0.45rem; }
 
-    .legend-line {
-      width: 26px; height: 3px; border-radius: 1px;
-    }
+    .legend-line { width: 26px; height: 3px; border-radius: 1px; }
     .legend-line.fast   { background: var(--blue);  opacity: 0.7; }
     .legend-line.scenic { background: var(--green); }
+
+    /* ── Theme toggle ────────────────────────── */
+    #theme-toggle {
+      background: none;
+      border: 1px solid var(--border-dark);
+      color: var(--muted);
+      font-size: 1rem;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    #theme-toggle:hover { color: var(--ink); border-color: var(--ink); }
 
     /* ── Address inputs ──────────────────────── */
     .addr-row {
@@ -312,7 +377,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(240, 235, 224, 0.88);
+      background: var(--overlay-bg);
       z-index: 9999;
       flex-direction: column;
       align-items: center;
@@ -343,22 +408,25 @@
   <form action="/" method="POST">
 
     <header>
-      <div>
+      <div class="wordmark-wrap">
         <div class="wordmark">Scenic <em>Route</em></div>
         <div class="tagline">OpenStreetMap · NetworkX · Folium</div>
       </div>
-      {% if distance %}
-      <div class="legend">
-        <div class="legend-item">
-          <div class="legend-line fast"></div>
-          <span>Fastest</span>
+      <div class="header-right">
+        {% if distance %}
+        <div class="legend">
+          <div class="legend-item">
+            <div class="legend-line fast"></div>
+            <span>Fastest</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-line scenic"></div>
+            <span>Scenic</span>
+          </div>
         </div>
-        <div class="legend-item">
-          <div class="legend-line scenic"></div>
-          <span>Scenic</span>
-        </div>
+        {% endif %}
+        <button type="button" id="theme-toggle" aria-label="Toggle dark mode">◑</button>
       </div>
-      {% endif %}
     </header>
 
     <div class="addr-row">
@@ -481,18 +549,40 @@
   </div>
 
   <script>
+    var toggle = document.getElementById('theme-toggle');
+
+    function setTheme(theme, animate) {
+      if (animate) {
+        document.documentElement.classList.add('theme-transitions');
+        setTimeout(function() {
+          document.documentElement.classList.remove('theme-transitions');
+        }, 420);
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+      toggle.textContent = theme === 'dark' ? '\u25d0' : '\u25d1';
+      localStorage.setItem('scenic-theme', theme);
+    }
+
+    // Sync toggle icon with current theme (already applied in <head>)
+    setTheme(document.documentElement.getAttribute('data-theme') || 'light', false);
+
+    toggle.addEventListener('click', function() {
+      var current = document.documentElement.getAttribute('data-theme') || 'light';
+      setTheme(current === 'dark' ? 'light' : 'dark', true);
+    });
+
     document.querySelector('form').addEventListener('submit', function(e) {
       e.preventDefault();
-      const overlay = document.getElementById('loading');
-      const msg = document.getElementById('loading-msg');
+      var overlay = document.getElementById('loading');
+      var msg = document.getElementById('loading-msg');
       overlay.classList.add('active');
       msg.textContent = 'Geocoding addresses\u2026';
 
-      const params = new URLSearchParams(new FormData(this));
-      const es = new EventSource('/stream?' + params.toString());
+      var params = new URLSearchParams(new FormData(this));
+      var es = new EventSource('/stream?' + params.toString());
 
       es.onmessage = function(event) {
-        const data = JSON.parse(event.data);
+        var data = JSON.parse(event.data);
         if (data.stage) {
           msg.textContent = data.stage;
         } else if (data.done) {
