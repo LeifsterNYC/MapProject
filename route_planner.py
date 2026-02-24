@@ -2,21 +2,15 @@ import osmnx
 import networkx
 import folium
 import math
-import heapq
-import copy
 import os
 import pickle
-from collections import defaultdict
+import numpy as np
+from scipy.spatial import KDTree
 
 _GRAPH_CACHE: dict = {}
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
-
-# osmnx.config(
-#     db_host='localhost',
-#     db_name='map_data',
-#     db_user='postgres',
-#     db_password='oddopolis'
-# )
+_CACHE_VERSION = 3  # Bump to invalidate all on-disk caches when fetched data changes.
+_SIGNAL_DELAY_HR = 35 / 3600  # 35-second stop penalty at signalized intersections.
 
 DEFAULT_SPEEDS = {
     'motorway': 65, 'trunk': 55, 'primary': 55, 'secondary': 45,
@@ -25,6 +19,7 @@ DEFAULT_SPEEDS = {
     'tertiary_link': 30, 'residential': 35, 'living_street': 15,
     'service': 10, 'pedestrian': 5,
 }
+
 
 def initialize_graph(start, end):
     buffer = 0.1
@@ -37,19 +32,20 @@ def initialize_graph(start, end):
     bbox_key = (round(n, 2), round(s, 2), round(e, 2), round(w, 2))
 
     if bbox_key not in _GRAPH_CACHE:
-        cache_file = os.path.join(_CACHE_DIR, f'graph_{bbox_key}.pkl')
+        cache_file = os.path.join(_CACHE_DIR, f'v{_CACHE_VERSION}_graph_{bbox_key}.pkl')
         if os.path.exists(cache_file):
             with open(cache_file, 'rb') as f:
                 graph = pickle.load(f)
         else:
             private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
             graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=private_filter)
+
             for u, v, k, data in graph.edges(data=True, keys=True):
                 highway = data.get('highway', 'residential')
                 if isinstance(highway, list):
                     highway = highway[0]
-                speed = None
                 raw = data.get('maxspeed')
+                speed = None
                 if isinstance(raw, str):
                     try:
                         speed = float(raw.split()[0])
@@ -61,54 +57,59 @@ def initialize_graph(start, end):
                     speed = DEFAULT_SPEEDS.get(highway, 25)
                 data['maxspeed'] = speed
                 data['travel_time'] = data['length'] / 1609.34 / speed
+
             # Add ~35-second delay at signalized intersections.
             # OSMnx preserves highway=traffic_signals on intersection nodes.
-            SIGNAL_DELAY_HR = 35 / 3600
             for node, ndata in graph.nodes(data=True):
                 if ndata.get('highway') == 'traffic_signals':
                     for _, _, edata in graph.in_edges(node, data=True):
-                        edata['travel_time'] = edata.get('travel_time', 0) + SIGNAL_DELAY_HR
-            # Fetch water bodies for proximity scoring (rivers/lakes = scenic roads nearby).
-            # Collect shoreline/centerline vertices so roads along rivers score correctly.
-            # (representative_point lands in the middle of wide rivers, too far from shore.)
+                        edata['travel_time'] = edata.get('travel_time', 0) + _SIGNAL_DELAY_HR
+
+            # Fetch water bodies for proximity scoring.
+            # Collect shoreline/centerline vertices — representative_point lands in the
+            # middle of wide rivers (too far from shore for a 400m proximity check).
             try:
-                water_tags = {'natural': 'water', 'waterway': ['river', 'stream']}
-                water_gdf = osmnx.features_from_bbox((w, s, e, n), tags=water_tags)
+                water_gdf = osmnx.features_from_bbox(
+                    (w, s, e, n), tags={'natural': 'water', 'waterway': ['river', 'stream']}
+                )
                 water_points = []
                 for geom in water_gdf.geometry:
                     if geom is None:
                         continue
                     try:
-                        if hasattr(geom, 'exterior'):      # Polygon
-                            raw = list(geom.exterior.coords)
-                        elif hasattr(geom, 'coords'):      # LineString / Point
-                            raw = list(geom.coords)
-                        elif hasattr(geom, 'geoms'):       # Multi* / GeometryCollection
-                            raw = []
+                        if hasattr(geom, 'exterior'):
+                            geom_coords = list(geom.exterior.coords)
+                        elif hasattr(geom, 'coords'):
+                            geom_coords = list(geom.coords)
+                        elif hasattr(geom, 'geoms'):
+                            geom_coords = []
                             for part in geom.geoms:
                                 if hasattr(part, 'exterior'):
-                                    raw.extend(part.exterior.coords)
+                                    geom_coords.extend(part.exterior.coords)
                                 elif hasattr(part, 'coords'):
-                                    raw.extend(part.coords)
+                                    geom_coords.extend(part.coords)
                         else:
-                            raw = []
+                            geom_coords = []
                         # coords are (lon, lat); subsample every 4th vertex
-                        water_points.extend((y, x) for x, y in raw[::4])
+                        water_points.extend((y, x) for x, y in geom_coords[::4])
                     except Exception:
                         continue
             except Exception:
                 water_points = []
             graph.graph['water_points'] = water_points
-            # Fetch roadside viewpoints/scenic stops (tourism=viewpoint only — not peaks,
-            # which are on mountain tops far from roads).
+
+            # Fetch roadside viewpoints (tourism=viewpoint only — not natural=peak,
+            # which are tagged on mountain tops far from roads).
             try:
-                vp_tags = {'tourism': ['viewpoint', 'scenic_viewpoint']}
-                vp_gdf = osmnx.features_from_bbox((w, s, e, n), tags=vp_tags)
+                vp_gdf = osmnx.features_from_bbox(
+                    (w, s, e, n), tags={'tourism': ['viewpoint', 'scenic_viewpoint']}
+                )
                 pts = vp_gdf.geometry.representative_point()
                 viewpoints = list(zip(pts.y, pts.x))
             except Exception:
                 viewpoints = []
             graph.graph['viewpoints'] = viewpoints
+
             os.makedirs(_CACHE_DIR, exist_ok=True)
             with open(cache_file, 'wb') as f:
                 pickle.dump(graph, f)
@@ -129,15 +130,14 @@ def _curviness_score(data):
     coords = list(geom.coords)
     if len(coords) < 2:
         return 0.0
-    dx = coords[-1][0] - coords[0][0]  # longitude diff
-    dy = coords[-1][1] - coords[0][1]  # latitude diff
+    dx = coords[-1][0] - coords[0][0]
+    dy = coords[-1][1] - coords[0][1]
     lat_avg = (coords[0][1] + coords[-1][1]) / 2.0
     meters_per_lon = 111320 * math.cos(math.radians(lat_avg))
     straight_dist = math.sqrt((dx * meters_per_lon) ** 2 + (dy * 111320) ** 2)
     if straight_dist < 1:
         return 1.0
-    sinuosity = length / straight_dist
-    return min(max(sinuosity - 1.0, 0.0), 1.0)
+    return min(max(length / straight_dist - 1.0, 0.0), 1.0)
 
 
 def _road_type_score(data):
@@ -171,8 +171,7 @@ def _nature_score(data):
 def _traffic_score(data):
     lanes = data.get('lanes')
     if lanes is None:
-        # No lanes tag: almost certainly a quiet single-lane country road
-        return 0.4
+        return 0.4  # no lanes tag → quiet single-lane country road
     try:
         n = int(lanes) if not isinstance(lanes, list) else int(lanes[0])
     except (ValueError, TypeError):
@@ -187,8 +186,7 @@ def _traffic_score(data):
 
 def _speed_score(data):
     speed = data.get('maxspeed', 35)
-    # Peaks at 45-55 mph (open country road). Penalizes slow urban roads and
-    # very fast highways where you're just a number in traffic.
+    # Peaks at 45-55 mph (open country road).
     if speed >= 65:
         return 0.4
     elif speed >= 55:
@@ -198,32 +196,42 @@ def _speed_score(data):
     elif speed >= 35:
         return 0.5
     else:
-        return 0.2  # slow rural roads are fine; only urban arterials score 0
+        return 0.2
 
 
-def _near_feature(mid_lat, mid_lon, points, proximity_m):
-    """Return True if any point in `points` is within proximity_m meters of (mid_lat, mid_lon)."""
-    lat_scale = 111320
-    lon_scale = 111320 * math.cos(math.radians(mid_lat))
-    for pt_lat, pt_lon in points:
-        dy = (pt_lat - mid_lat) * lat_scale
-        dx = (pt_lon - mid_lon) * lon_scale
-        if math.sqrt(dx*dx + dy*dy) < proximity_m:
-            return True
-    return False
+def _make_tree(points, lat_m, lon_m):
+    """Project (lat, lon) points to approximate metres and return a KDTree."""
+    if not points:
+        return None
+    arr = np.array([(lat * lat_m, lon * lon_m) for lat, lon in points])
+    return KDTree(arr)
 
 
 def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Speed, traffic, water proximity, and viewpoints are always included at fixed weights.
-    max_score = w_curve + w_road + w_nature + 3.5  # +0.5 for viewpoint bonus
+    # Speed, traffic, water, and viewpoints are always included at fixed weights.
+    max_score = w_curve + w_road + w_nature + 3.5
+
     water_points = G.graph.get('water_points', [])
     viewpoints = G.graph.get('viewpoints', [])
 
+    # Project to metres using a single reference latitude (error < 0.5% over 50-mile bbox).
+    ref_lat = sum(d.get('y', 0) for _, d in list(G.nodes(data=True))[:200]) / 200
+    lat_m = 111320.0
+    lon_m = 111320.0 * math.cos(math.radians(ref_lat))
+
+    water_tree = _make_tree(water_points, lat_m, lon_m)
+    view_tree = _make_tree(viewpoints, lat_m, lon_m)
+
+    def near(tree, lat, lon, radius):
+        if tree is None:
+            return False
+        dist, _ = tree.query([lat * lat_m, lon * lon_m])
+        return dist < radius
+
     for u, v, k, data in G.edges(data=True, keys=True):
-        # Compute edge midpoint — use geometry if available, else average endpoints.
         geom = data.get('geometry')
         if geom is not None:
             coords = list(geom.coords)
@@ -233,10 +241,8 @@ def score_scenic_edges(G, weights: dict) -> None:
             mid_lat = (G.nodes[u]['y'] + G.nodes[v]['y']) / 2
             mid_lon = (G.nodes[u]['x'] + G.nodes[v]['x']) / 2
 
-        # Roads within 400m of a river/lake get +1.0.
-        water = 1.0 if _near_feature(mid_lat, mid_lon, water_points, proximity_m=400) else 0.0
-        # Roads within 200m of a roadside viewpoint/scenic stop get +0.5.
-        view = 0.5 if _near_feature(mid_lat, mid_lon, viewpoints, proximity_m=200) else 0.0
+        water = 1.0 if near(water_tree, mid_lat, mid_lon, 400) else 0.0
+        view = 0.5 if near(view_tree, mid_lat, mid_lon, 200) else 0.0
 
         scenic_score = (
             w_curve * _curviness_score(data) +
@@ -248,15 +254,8 @@ def score_scenic_edges(G, weights: dict) -> None:
             view
         )
         data['scenic_score'] = scenic_score
-        # Normalize to [0,1] then apply exponential penalty.
-        # exp(2)≈7.4× for score=0 (highway), 1× for max scenic.
-        # Clamped so adding new scoring dimensions doesn't change the range.
         t = min(scenic_score / max_score, 1.0) if max_score > 0 else 0.0
         data['scenic_cost'] = data['travel_time'] * math.exp(3.0 * (1.0 - t))
-
-
-def plan_route(G, start, end):
-    return networkx.shortest_path(G, start, end, weight="travel_time")
 
 
 def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
@@ -274,34 +273,3 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
         return fast_route, fast_route, fast_time * 60, fast_time * 60
 
     return fast_route, scenic_route, fast_time * 60, scenic_time * 60
-
-
-def yen_k_shortest_routes(G, start, end, weight, k):
-    shortest_paths = []
-    shortest_paths.append(networkx.shortest_path(G, start, end, weight))
-
-    for k in range(1, k):
-        for i in range(len(shortest_paths[-1]) - 1):
-            path_list = []
-            current_path = shortest_paths[-1]
-            spur_node = current_path[i]
-            root_path = current_path[:i + 1]
-
-            graph_copy = copy.deepcopy(G)
-            graph_copy.remove_nodes_from(root_path[:-1])
-
-            try:
-                spur_path = networkx.shortest_path(graph_copy, spur_node, end, weight)
-            except networkx.NetworkXNoPath:
-                continue
-
-            full_path = root_path + spur_path[1:]
-
-            if full_path not in shortest_paths:
-                path_list.append((full_path, networkx.path_weight(G, full_path, weight)))
-
-        if path_list:
-            path_list.sort(key=lambda e: e[1])
-            shortest_paths.append(path_list[0][0])
-
-    return shortest_paths

@@ -3,5 +3,6 @@ __pycache__/
 *.pyo
 *~
 cache/
+.graph_cache/
 CLAUDE.md
 .claude/
