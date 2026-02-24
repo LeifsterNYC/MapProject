@@ -16,9 +16,10 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    /* ── Themes ──────────────────────────────── */
+    /* ── Themes ──────────────────────────────────────── */
     :root {
       --bg:          #f0ebe0;
+      --panel:       #e9e3d5;
       --input-bg:    #faf8f3;
       --border:      #c4b99a;
       --border-dark: #8a7a5e;
@@ -33,6 +34,7 @@
 
     [data-theme="dark"] {
       --bg:          #161410;
+      --panel:       #191713;
       --input-bg:    #1d1b13;
       --border:      #312c1b;
       --border-dark: #4e4535;
@@ -58,8 +60,11 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html, body { height: 100%; }
+
     body {
-      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
       background-color: var(--bg);
       background-image:
         repeating-linear-gradient(0deg,
@@ -72,37 +77,33 @@
       color: var(--ink);
     }
 
-    /* ── Header ─────────────────────────────── */
+    /* ── Header ──────────────────────────────────────── */
     header {
+      flex-shrink: 0;
       display: flex;
       align-items: center;
       gap: 2rem;
-      padding: 1.5rem 2.5rem 1.1rem;
+      padding: 1.1rem 1.8rem 0.95rem;
       border-bottom: 2px solid var(--ink);
     }
 
     .wordmark-wrap {
       display: flex;
       flex-direction: column;
-      gap: 0.18rem;
+      gap: 0.15rem;
     }
 
     .wordmark {
       font-family: 'Cormorant Garamond', serif;
-      font-size: 2.3rem;
-      font-weight: 600;
-      letter-spacing: -0.015em;
+      font-size: 2rem;
+      font-weight: 400;
+      font-style: italic;
+      letter-spacing: 0.01em;
       line-height: 1;
     }
 
-    .wordmark em {
-      font-style: italic;
-      font-weight: 400;
-      color: var(--green);
-    }
-
     .tagline {
-      font-size: 0.6rem;
+      font-size: 0.55rem;
       letter-spacing: 0.22em;
       text-transform: uppercase;
       color: var(--muted);
@@ -112,25 +113,24 @@
       margin-left: auto;
       display: flex;
       align-items: center;
-      gap: 1.6rem;
+      gap: 1.4rem;
     }
 
     .legend {
       display: flex;
       align-items: center;
-      gap: 1.4rem;
-      font-size: 0.68rem;
+      gap: 1.2rem;
+      font-size: 0.64rem;
       letter-spacing: 0.06em;
       color: var(--muted);
     }
 
-    .legend-item { display: flex; align-items: center; gap: 0.45rem; }
-
-    .legend-line { width: 26px; height: 3px; border-radius: 1px; }
-    .legend-line.fast   { background: var(--blue);  opacity: 0.7; }
+    .legend-item { display: flex; align-items: center; gap: 0.4rem; }
+    .legend-line { width: 22px; height: 3px; border-radius: 1px; }
+    .legend-line.fast   { background: var(--blue); opacity: 0.7; }
     .legend-line.scenic { background: var(--green); }
 
-    /* ── Theme toggle ────────────────────────── */
+    /* ── Theme toggle ─────────────────────────────── */
     #theme-toggle {
       background: none;
       border: 1px solid var(--border-dark);
@@ -148,19 +148,53 @@
     }
     #theme-toggle:hover { color: var(--ink); border-color: var(--ink); }
 
-    /* ── Address inputs ──────────────────────── */
-    .addr-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0 3rem;
-      padding: 1.4rem 2.5rem;
+    /* ── Main layout ─────────────────────────────── */
+    .main-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ── Sidebar ─────────────────────────────────── */
+    .sidebar {
+      width: 272px;
+      flex-shrink: 0;
+      border-right: 2px solid var(--ink);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      background-color: var(--panel);
+      background-image:
+        repeating-linear-gradient(0deg,
+          transparent, transparent 35px,
+          var(--grid-v) 35px, var(--grid-v) 36px),
+        repeating-linear-gradient(90deg,
+          transparent, transparent 35px,
+          var(--grid-h) 35px, var(--grid-h) 36px);
+    }
+
+    .sidebar form { display: contents; }
+
+    .form-section {
+      padding: 1.2rem 1.5rem;
       border-bottom: 1px solid var(--border);
     }
 
-    .field { display: flex; flex-direction: column; gap: 0.38rem; }
+    .section-label {
+      font-size: 0.5rem;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: var(--border-dark);
+      margin-bottom: 0.9rem;
+    }
+
+    /* ── Address inputs ───────────────────────────── */
+    .field { display: flex; flex-direction: column; gap: 0.32rem; }
+    .field + .field { margin-top: 0.85rem; }
 
     .field label {
-      font-size: 0.58rem;
+      font-size: 0.52rem;
       letter-spacing: 0.22em;
       text-transform: uppercase;
       color: var(--muted);
@@ -171,26 +205,62 @@
       background: transparent;
       border: none;
       border-bottom: 1.5px solid var(--border-dark);
-      padding: 0.52rem 0.3rem;
+      padding: 0.42rem 0.2rem;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.83rem;
+      font-size: 0.78rem;
       color: var(--ink);
       outline: none;
       transition: border-color 0.18s;
     }
-    input[type=text]::placeholder { color: var(--border-dark); }
+    input[type=text]::placeholder { color: var(--border-dark); opacity: 0.7; }
     input[type=text]:focus        { border-bottom-color: var(--green); }
 
-    /* ── Sliders ─────────────────────────────── */
-    .slider-row {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 0 2.5rem;
-      padding: 1.1rem 2.5rem 1.3rem;
-      border-bottom: 1px solid var(--border);
+    /* ── Criteria selectors ───────────────────────── */
+    .criterion {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .criterion + .criterion { margin-top: 0.65rem; }
+
+    .criterion-label {
+      font-size: 0.52rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
     }
 
-    .slider-field { display: flex; flex-direction: column; gap: 0.55rem; }
+    .step-btns { display: flex; }
+
+    .step-btn {
+      background: transparent;
+      border: 1px solid var(--border-dark);
+      color: var(--muted);
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 0.54rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 0.22rem 0.5rem;
+      cursor: pointer;
+      margin-left: -1px;
+      position: relative;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .step-btn:first-child { margin-left: 0; }
+    .step-btn:hover:not(.active) {
+      color: var(--ink);
+      border-color: var(--ink);
+      z-index: 1;
+    }
+    .step-btn.active {
+      background: var(--ink);
+      color: var(--bg);
+      border-color: var(--ink);
+      z-index: 1;
+    }
+
+    /* ── Slider (max detour) ──────────────────────── */
+    .slider-field { display: flex; flex-direction: column; gap: 0.5rem; }
 
     .slider-head {
       display: flex;
@@ -199,18 +269,16 @@
     }
 
     .slider-field label {
-      font-size: 0.58rem;
-      letter-spacing: 0.2em;
+      font-size: 0.52rem;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
       color: var(--muted);
     }
 
     .val {
-      font-size: 0.75rem;
+      font-size: 0.7rem;
       font-weight: 500;
       color: var(--ink);
-      min-width: 2.8rem;
-      text-align: right;
     }
 
     input[type=range] {
@@ -221,7 +289,7 @@
       background: var(--border-dark);
       outline: none;
       cursor: pointer;
-      margin: 2px 0;
+      margin: 3px 0;
     }
     input[type=range]::-webkit-slider-thumb {
       -webkit-appearance: none;
@@ -242,137 +310,190 @@
       cursor: pointer;
     }
 
-    /* ── TomTom toggle row ───────────────────── */
-    .tomtom-row {
-      padding: 0.65rem 2.5rem 0.75rem;
-      border-bottom: 1px solid var(--border);
-    }
-
+    /* ── TomTom toggle ────────────────────────────── */
     .toggle-label {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
-      font-size: 0.68rem;
-      letter-spacing: 0.1em;
+      gap: 0.55rem;
+      font-size: 0.6rem;
+      letter-spacing: 0.08em;
       color: var(--muted);
       cursor: pointer;
       user-select: none;
+      margin-top: 0.9rem;
     }
 
     .toggle-label input[type=checkbox] {
       accent-color: var(--ink);
-      width: 13px;
-      height: 13px;
+      width: 12px;
+      height: 12px;
       cursor: pointer;
     }
 
     .tomtom-badge {
-      font-size: 0.55rem;
+      font-size: 0.48rem;
       letter-spacing: 0.18em;
       text-transform: uppercase;
       color: var(--bg);
       background: #c0392b;
-      padding: 0.15rem 0.45rem;
+      padding: 0.12rem 0.38rem;
       border-radius: 2px;
     }
 
-    .closure-note {
-      font-size: 0.62rem;
-      color: #c0392b;
-      letter-spacing: 0.08em;
-    }
-
-    /* ── Submit bar ──────────────────────────── */
-    .action-row {
-      display: flex;
-      align-items: center;
-      gap: 2rem;
-      padding: 0.95rem 2.5rem;
-      border-bottom: 1px solid var(--border);
-    }
-
+    /* ── Submit button ────────────────────────────── */
     button[type=submit] {
+      width: 100%;
       background: var(--ink);
       color: var(--bg);
       border: none;
-      padding: 0.58rem 2rem;
+      padding: 0.65rem 1.5rem;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.7rem;
-      letter-spacing: 0.18em;
+      font-size: 0.64rem;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
       cursor: pointer;
       transition: background 0.18s;
     }
     button[type=submit]:hover { background: var(--green); }
 
-    .dist {
-      font-size: 0.72rem;
-      color: var(--muted);
+    /* ── Route stats ──────────────────────────────── */
+    .route-stats {
+      margin-top: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
     }
-    .dist strong { color: var(--ink); font-weight: 500; }
 
     .times {
       display: flex;
-      gap: 2rem;
-      font-size: 0.72rem;
+      gap: 1.8rem;
     }
-    .time-item { display: flex; flex-direction: column; gap: 0.15rem; }
+
+    .time-item { display: flex; flex-direction: column; gap: 0.12rem; }
+
     .time-label {
-      font-size: 0.55rem;
-      letter-spacing: 0.2em;
+      font-size: 0.48rem;
+      letter-spacing: 0.22em;
       text-transform: uppercase;
       color: var(--muted);
     }
-    .time-val { font-weight: 500; }
+
+    .time-val { font-size: 0.72rem; font-weight: 500; }
     .time-val.fast   { color: var(--blue); }
     .time-val.scenic { color: var(--green); }
-    .time-note {
+
+    .dist {
       font-size: 0.6rem;
       color: var(--muted);
-      align-self: flex-end;
-      padding-bottom: 0.1rem;
     }
 
-    /* ── Map ─────────────────────────────────── */
-    #map-wrap {
-      padding: 1.8rem 2.5rem 0;
+    .closure-note {
+      font-size: 0.58rem;
+      color: #c0392b;
+      letter-spacing: 0.06em;
     }
 
-    .gmaps-row {
+    .error-note {
+      margin-top: 0.75rem;
+      font-size: 0.6rem;
+      color: #8b2020;
+    }
+
+    /* ── Google Maps links ────────────────────────── */
+    .gmaps-section {
       display: flex;
-      gap: 1rem;
-      padding: 1rem 2.5rem 2.5rem;
+      flex-direction: column;
+      gap: 0.45rem;
     }
 
     .gmaps-btn {
-      display: inline-block;
-      padding: 0.45rem 1.4rem;
+      display: block;
+      padding: 0.4rem 1rem;
       font-family: 'IBM Plex Mono', monospace;
-      font-size: 0.66rem;
-      letter-spacing: 0.16em;
+      font-size: 0.58rem;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       text-decoration: none;
-      border: 1.5px solid var(--ink);
-      color: var(--ink);
-      transition: background 0.18s, color 0.18s;
+      border: 1.5px solid var(--border-dark);
+      color: var(--muted);
+      transition: background 0.18s, color 0.18s, border-color 0.18s;
     }
-    .gmaps-btn:hover { background: var(--ink); color: var(--bg); }
+    .gmaps-btn:hover { background: var(--ink); color: var(--bg); border-color: var(--ink); }
     .gmaps-btn.scenic { border-color: var(--green); color: var(--green); }
-    .gmaps-btn.scenic:hover { background: var(--green); color: var(--bg); }
+    .gmaps-btn.scenic:hover { background: var(--green); color: var(--bg); border-color: var(--green); }
 
-    #map-frame {
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--ink);
+    /* ── Map pane ─────────────────────────────────── */
+    .map-pane {
+      flex: 1;
+      position: relative;
       overflow: hidden;
+    }
+
+    .map-empty {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.7rem;
+    }
+
+    .map-empty-text {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.8rem;
+      font-style: italic;
+      font-weight: 400;
+      color: var(--border-dark);
+      letter-spacing: 0.02em;
+    }
+
+    .map-empty-sub {
+      font-size: 0.54rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--border);
+    }
+
+    /* Fill the Folium iframe into the map pane regardless of its internal sizing.
+       Folium outputs: <div> <div position:relative; padding-bottom:60%> <span/> <iframe/> </div> </div>
+       We keep position:relative on the inner div (iframe's containing block) and
+       zero out the padding-bottom aspect-ratio trick, replacing it with explicit height. */
+    #map-frame {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
+    /* Folium outer wrapper */
+    #map-frame > div {
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    /* Folium inner aspect-ratio container — keep relative, kill the padding trick */
+    #map-frame > div > div {
+      position: relative !important;
+      width: 100% !important;
+      height: 100% !important;
+      padding-bottom: 0 !important;
+    }
+
+    /* Hide the "Trust Notebook" fallback span */
+    #map-frame span {
+      display: none !important;
     }
 
     #map-frame iframe {
       display: block;
+      position: absolute !important;
+      inset: 0 !important;
       width: 100% !important;
+      height: 100% !important;
       border: none !important;
     }
 
-    /* ── Loading overlay ─────────────────────── */
+    /* ── Loading overlay ──────────────────────────── */
     #loading {
       display: none;
       position: fixed;
@@ -405,143 +526,165 @@
 </head>
 
 <body>
-  <form action="/" method="POST">
 
-    <header>
-      <div class="wordmark-wrap">
-        <div class="wordmark">Ram<em>ble</em></div>
-        <div class="tagline">OpenStreetMap · NetworkX · Folium</div>
-      </div>
-      <div class="header-right">
-        {% if distance %}
-        <div class="legend">
-          <div class="legend-item">
-            <div class="legend-line fast"></div>
-            <span>Fastest</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line scenic"></div>
-            <span>Scenic</span>
-          </div>
-        </div>
-        {% endif %}
-        <button type="button" id="theme-toggle" aria-label="Toggle dark mode">◑</button>
-      </div>
-    </header>
-
-    <div class="addr-row">
-      <div class="field">
-        <label for="start_address">From</label>
-        <input type="text" id="start_address" name="start_address"
-               placeholder="Starting address">
-      </div>
-      <div class="field">
-        <label for="end_address">To</label>
-        <input type="text" id="end_address" name="end_address"
-               placeholder="Destination">
-      </div>
+  <header>
+    <div class="wordmark-wrap">
+      <div class="wordmark">Ramble</div>
+      <div class="tagline">OpenStreetMap · NetworkX · Folium</div>
     </div>
-
-    <div class="slider-row">
-      <div class="slider-field">
-        <div class="slider-head">
-          <label for="curviness_weight">Curviness</label>
-          <span class="val" id="v_curve">{{ "%.1f"|format(curviness_weight) }}</span>
-        </div>
-        <input type="range" id="curviness_weight" name="curviness_weight"
-               min="0" max="2" step="0.1" value="{{ curviness_weight }}"
-               oninput="document.getElementById('v_curve').textContent=(+this.value).toFixed(1)">
-      </div>
-
-      <div class="slider-field">
-        <div class="slider-head">
-          <label for="nature_weight">Nature</label>
-          <span class="val" id="v_nat">{{ "%.1f"|format(nature_weight) }}</span>
-        </div>
-        <input type="range" id="nature_weight" name="nature_weight"
-               min="0" max="2" step="0.1" value="{{ nature_weight }}"
-               oninput="document.getElementById('v_nat').textContent=(+this.value).toFixed(1)">
-      </div>
-
-      <div class="slider-field">
-        <div class="slider-head">
-          <label for="road_type_weight">Road Type</label>
-          <span class="val" id="v_road">{{ "%.1f"|format(road_type_weight) }}</span>
-        </div>
-        <input type="range" id="road_type_weight" name="road_type_weight"
-               min="0" max="2" step="0.1" value="{{ road_type_weight }}"
-               oninput="document.getElementById('v_road').textContent=(+this.value).toFixed(1)">
-      </div>
-
-      <div class="slider-field">
-        <div class="slider-head">
-          <label for="max_detour">Max Detour</label>
-          <span class="val" id="v_det">{{ "%.1f"|format(max_detour) }}×</span>
-        </div>
-        <input type="range" id="max_detour" name="max_detour"
-               min="1.0" max="5.0" step="0.1" value="{{ max_detour }}"
-               oninput="document.getElementById('v_det').textContent=(+this.value).toFixed(1)+'×'">
-      </div>
-    </div>
-
-    {% if has_tomtom %}
-    <div class="tomtom-row">
-      <label class="toggle-label">
-        <input type="checkbox" name="use_tomtom" value="1"
-               {% if use_tomtom %}checked{% endif %}>
-        Avoid real-time road closures
-        <span class="tomtom-badge">TomTom</span>
-      </label>
-    </div>
-    {% endif %}
-
-    <div class="action-row">
-      <button type="submit">Find Route</button>
-      {% if fast_min is defined and fast_min %}
-      <div class="times">
-        <div class="time-item">
-          <span class="time-label">Fastest</span>
-          <span class="time-val fast">{{ "%d"|format(fast_min|int) }} min</span>
-        </div>
-        <div class="time-item">
-          <span class="time-label">Scenic</span>
-          <span class="time-val scenic">{{ "%d"|format(scenic_min|int) }} min</span>
-        </div>
-        <span class="time-note">est. · speed-limit only</span>
-      </div>
-      {% endif %}
+    <div class="header-right">
       {% if distance %}
-      <span class="dist">{{ "%.1f"|format(distance) }} mi straight-line</span>
+      <div class="legend">
+        <div class="legend-item">
+          <div class="legend-line fast"></div>
+          <span>Fastest</span>
+        </div>
+        <div class="legend-item">
+          <div class="legend-line scenic"></div>
+          <span>Scenic</span>
+        </div>
+      </div>
       {% endif %}
-      {% if has_tomtom and use_tomtom and closure_count %}
-      <span class="closure-note">{{ closure_count }} road segment{{ 's' if closure_count != 1 else '' }} blocked</span>
+      <button type="button" id="theme-toggle" aria-label="Toggle dark mode">◑</button>
+    </div>
+  </header>
+
+  <div class="main-layout">
+
+    <aside class="sidebar">
+      <form action="/" method="POST">
+
+        <!-- Addresses -->
+        <div class="form-section">
+          <div class="field">
+            <label for="start_address">From</label>
+            <input type="text" id="start_address" name="start_address"
+                   placeholder="Starting address">
+          </div>
+          <div class="field">
+            <label for="end_address">To</label>
+            <input type="text" id="end_address" name="end_address"
+                   placeholder="Destination">
+          </div>
+        </div>
+
+        <!-- Scenic criteria -->
+        <div class="form-section">
+          <div class="section-label">Scenic Criteria</div>
+
+          <div class="criterion">
+            <span class="criterion-label">Curviness</span>
+            <div class="step-btns">
+              <button type="button" class="step-btn" data-target="curviness_weight" data-val="0">off</button>
+              <button type="button" class="step-btn" data-target="curviness_weight" data-val="1">on</button>
+              <button type="button" class="step-btn" data-target="curviness_weight" data-val="2">boost</button>
+            </div>
+            <input type="hidden" name="curviness_weight" value="{{ curviness_weight }}">
+          </div>
+
+          <div class="criterion">
+            <span class="criterion-label">Nature</span>
+            <div class="step-btns">
+              <button type="button" class="step-btn" data-target="nature_weight" data-val="0">off</button>
+              <button type="button" class="step-btn" data-target="nature_weight" data-val="1">on</button>
+              <button type="button" class="step-btn" data-target="nature_weight" data-val="2">boost</button>
+            </div>
+            <input type="hidden" name="nature_weight" value="{{ nature_weight }}">
+          </div>
+
+          <div class="criterion">
+            <span class="criterion-label">Road Type</span>
+            <div class="step-btns">
+              <button type="button" class="step-btn" data-target="road_type_weight" data-val="0">off</button>
+              <button type="button" class="step-btn" data-target="road_type_weight" data-val="1">on</button>
+              <button type="button" class="step-btn" data-target="road_type_weight" data-val="2">boost</button>
+            </div>
+            <input type="hidden" name="road_type_weight" value="{{ road_type_weight }}">
+          </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="form-section">
+          <div class="slider-field">
+            <div class="slider-head">
+              <label for="max_detour">Max Detour</label>
+              <span class="val" id="v_det">{{ "%.1f"|format(max_detour) }}×</span>
+            </div>
+            <input type="range" id="max_detour" name="max_detour"
+                   min="1.0" max="5.0" step="0.1" value="{{ max_detour }}"
+                   oninput="document.getElementById('v_det').textContent=(+this.value).toFixed(1)+'×'">
+          </div>
+          {% if has_tomtom %}
+          <label class="toggle-label">
+            <input type="checkbox" name="use_tomtom" value="1"
+                   {% if use_tomtom %}checked{% endif %}>
+            Avoid road closures
+            <span class="tomtom-badge">TomTom</span>
+          </label>
+          {% endif %}
+        </div>
+
+        <!-- Action -->
+        <div class="form-section">
+          <button type="submit">Find Route</button>
+          {% if fast_min is defined and fast_min %}
+          <div class="route-stats">
+            <div class="times">
+              <div class="time-item">
+                <span class="time-label">Fastest</span>
+                <span class="time-val fast">{{ "%d"|format(fast_min|int) }} min</span>
+              </div>
+              <div class="time-item">
+                <span class="time-label">Scenic</span>
+                <span class="time-val scenic">{{ "%d"|format(scenic_min|int) }} min</span>
+              </div>
+            </div>
+            {% if distance %}
+            <div class="dist">{{ "%.1f"|format(distance) }} mi straight-line</div>
+            {% endif %}
+            {% if has_tomtom and use_tomtom and closure_count %}
+            <div class="closure-note">{{ closure_count }} segment{{ 's' if closure_count != 1 else '' }} blocked</div>
+            {% endif %}
+          </div>
+          {% endif %}
+          {% if error %}
+          <div class="error-note">{{ error }}</div>
+          {% endif %}
+        </div>
+
+      </form>
+
+      {% if scenic_gmaps or fast_gmaps %}
+      <div class="form-section gmaps-section">
+        {% if scenic_gmaps %}
+        <a class="gmaps-btn scenic" href="{{ scenic_gmaps }}" target="_blank" rel="noopener">
+          Open Scenic ↗
+        </a>
+        {% endif %}
+        {% if fast_gmaps %}
+        <a class="gmaps-btn" href="{{ fast_gmaps }}" target="_blank" rel="noopener">
+          Open Fastest ↗
+        </a>
+        {% endif %}
+      </div>
       {% endif %}
-      {% if error %}
-      <span class="dist" style="color:#8b2020">{{ error }}</span>
+
+    </aside>
+
+    <div class="map-pane">
+      {% if route_map %}
+      <div id="map-frame">
+        {{ route_map|safe }}
+      </div>
+      {% else %}
+      <div class="map-empty">
+        <div class="map-empty-text">where to?</div>
+        <div class="map-empty-sub">Enter addresses to plan your route</div>
+      </div>
       {% endif %}
     </div>
 
-  </form>
-
-  {% if route_map %}
-  <div id="map-wrap">
-    <div id="map-frame">
-      {{ route_map|safe }}
-    </div>
   </div>
-  <div class="gmaps-row">
-    {% if scenic_gmaps %}
-    <a class="gmaps-btn scenic" href="{{ scenic_gmaps }}" target="_blank" rel="noopener">
-      Open Scenic in Google Maps
-    </a>
-    {% endif %}
-    {% if fast_gmaps %}
-    <a class="gmaps-btn" href="{{ fast_gmaps }}" target="_blank" rel="noopener">
-      Open Fastest in Google Maps
-    </a>
-    {% endif %}
-  </div>
-  {% endif %}
 
   <div id="loading">
     <div class="spinner"></div>
@@ -601,6 +744,29 @@
         es.close();
         overlay.classList.remove('active');
       };
+    });
+
+    // ── Criterion step buttons ────────────────────────
+    document.querySelectorAll('.step-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var target = this.dataset.target;
+        document.querySelectorAll('.step-btn[data-target="' + target + '"]').forEach(function(b) {
+          b.classList.remove('active');
+        });
+        this.classList.add('active');
+        document.querySelector('input[name="' + target + '"]').value = this.dataset.val;
+      });
+    });
+
+    // Restore step button state on page load
+    ['curviness_weight', 'nature_weight', 'road_type_weight'].forEach(function(name) {
+      var input = document.querySelector('input[name="' + name + '"]');
+      if (!input) return;
+      var val = Math.round(parseFloat(input.value) || 1);
+      if (isNaN(val) || val < 0 || val > 2) val = 1;
+      input.value = val;
+      var btn = document.querySelector('.step-btn[data-target="' + name + '"][data-val="' + val + '"]');
+      if (btn) btn.classList.add('active');
     });
   </script>
 </body>
