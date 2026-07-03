@@ -230,76 +230,153 @@ def _make_tree(points, lat_m, lon_m):
     return KDTree(arr)
 
 
+def relative_proximity_scores(distances, far_gate_m=2000.0):
+    """Convert per-edge distances-to-a-feature into a discriminating [0, 1] score.
+
+    Percentile-rank based: the closest edge scores 1.0, the farthest 0.0, spread
+    evenly in between — so the signal separates edges *within this graph* instead
+    of saturating near 1.0 in feature-rich regions (the root-cause bug).
+
+    If the feature is effectively absent (median distance beyond far_gate_m, or an
+    empty/all-infinite distance array), every edge scores 0.0 so a missing feature
+    contributes nothing rather than rewarding merely-least-far edges.
+    """
+    d = np.asarray(distances, dtype=float)
+    n = d.size
+    if n == 0:
+        return d
+    finite = d[np.isfinite(d)]
+    if finite.size == 0 or np.median(finite) > far_gate_m:
+        return np.zeros(n)
+    order = d.argsort()
+    ranks = np.empty(n, dtype=float)
+    ranks[order] = np.arange(n)
+    return 1.0 - ranks / max(n - 1, 1)
+
+
 def score_scenic_edges(G, weights: dict) -> None:
     w_curve = weights.get('curviness', 1.0)
     w_road = weights.get('road_type', 1.0)
     w_nature = weights.get('nature', 1.0)
-    # Fixed components: speed(1.0) + traffic(0.5) + water(1.0) + view(0.5) = 3.0
-    max_score = w_curve + w_road + w_nature + 3.0
-
-    water_points = G.graph.get('water_points', [])
-    viewpoints = G.graph.get('viewpoints', [])
-    nature_points = G.graph.get('nature_points', [])
+    # Fixed component weights: speed, traffic, water, viewpoints.
+    W_SPEED, W_TRAFFIC, W_WATER, W_VIEW = 1.0, 0.5, 1.0, 0.5
 
     # Project to metres using a single reference latitude (error < 0.5% over 50-mile bbox).
     ref_lat = sum(d.get('y', 0) for _, d in list(G.nodes(data=True))[:200]) / 200
     lat_m = 111320.0
     lon_m = 111320.0 * math.cos(math.radians(ref_lat))
 
-    water_tree = _make_tree(water_points, lat_m, lon_m)
-    view_tree = _make_tree(viewpoints, lat_m, lon_m)
-    nature_tree = _make_tree(nature_points, lat_m, lon_m)
+    water_tree = _make_tree(G.graph.get('water_points', []), lat_m, lon_m)
+    view_tree = _make_tree(G.graph.get('viewpoints', []), lat_m, lon_m)
+    nature_tree = _make_tree(G.graph.get('nature_points', []), lat_m, lon_m)
 
-    def near_score(tree, lat, lon, radius):
-        """Gradient proximity score: 1.0 at distance 0, 0.0 at distance >= radius."""
-        if tree is None:
-            return 0.0
-        dist, _ = tree.query([lat * lat_m, lon * lon_m])
-        return max(0.0, 1.0 - dist / radius)
-
-    for u, v, k, data in G.edges(data=True, keys=True):
+    edges = list(G.edges(data=True, keys=True))
+    mids = []
+    for u, v, k, data in edges:
         geom = data.get('geometry')
         if geom is not None:
             coords = list(geom.coords)
             mid = coords[len(coords) // 2]
-            mid_lon, mid_lat = mid[0], mid[1]
+            mids.append((mid[1], mid[0]))
         else:
-            mid_lat = (G.nodes[u]['y'] + G.nodes[v]['y']) / 2
-            mid_lon = (G.nodes[u]['x'] + G.nodes[v]['x']) / 2
+            mids.append(((G.nodes[u]['y'] + G.nodes[v]['y']) / 2,
+                         (G.nodes[u]['x'] + G.nodes[v]['x']) / 2))
+    mids_m = np.array([(lat * lat_m, lon * lon_m) for lat, lon in mids])
 
-        water  = near_score(water_tree,  mid_lat, mid_lon, 400)        # [0.0, 1.0]
-        view   = near_score(view_tree,   mid_lat, mid_lon, 200) * 0.5  # [0.0, 0.5]
-        nature = near_score(nature_tree, mid_lat, mid_lon, 150)        # [0.0, 1.0]
+    def dists_to(tree):
+        if tree is None:
+            return np.full(len(mids), np.inf)
+        dist, _ = tree.query(mids_m)
+        return dist
 
-        scenic_score = (
-            w_curve  * _curviness_score(data) +
-            w_road   * _road_type_score(data) +
-            w_nature * nature +
-            _speed_score(data) +
-            _traffic_score(data) +
-            water +
-            view
+    # Dense features (water, nature: thousands of points in a green region) use
+    # relative (percentile-rank) proximity so they discriminate within this graph
+    # instead of saturating near 1.0 everywhere. Sparse viewpoints keep an
+    # absolute 200 m gradient — ranking would zero them out (the median edge is
+    # legitimately far from any viewpoint).
+    water_rel = relative_proximity_scores(dists_to(water_tree))
+    nature_rel = relative_proximity_scores(dists_to(nature_tree))
+    view_abs = np.maximum(0.0, 1.0 - dists_to(view_tree) / 200.0)
+
+    scores = np.empty(len(edges))
+    for i, (u, v, k, data) in enumerate(edges):
+        scores[i] = (
+            w_curve * _curviness_score(data) +
+            w_road * _road_type_score(data) +
+            w_nature * float(nature_rel[i]) +
+            W_SPEED * _speed_score(data) +
+            W_TRAFFIC * _traffic_score(data) +
+            W_WATER * float(water_rel[i]) +
+            W_VIEW * float(view_abs[i])
         )
-        data['scenic_score'] = scenic_score
-        t = min(scenic_score / max_score, 1.0) if max_score > 0 else 0.0
-        data['scenic_cost'] = data['travel_time'] * math.exp(3.0 * (1.0 - t))
+
+    # Empirical normalization: percentile-rank the total score across the graph.
+    # Summed component scores cluster in a narrow band (measured ~1.5-2.3 of a
+    # theoretical 6.0), so dividing by the theoretical max leaves the routing
+    # signal too compressed to matter. Ranking spreads scenic_t over [0, 1].
+    order = scores.argsort()
+    ranks = np.empty(len(edges))
+    ranks[order] = np.arange(len(edges))
+    t_all = ranks / max(len(edges) - 1, 1)
+
+    for i, (u, v, k, data) in enumerate(edges):
+        data['scenic_score'] = float(scores[i])
+        data['scenic_t'] = float(t_all[i])
+
+
+# K values probed by plan_scenic_route. Route choice is knife-edged in K (a
+# single fixed K yields either the fast route or a blown detour budget depending
+# on the trip), so we probe a ladder and pick the best route within budget.
+_K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
+
+
+def _tw_mean_score(G, path):
+    """Travel-time-weighted mean scenic_score along a path."""
+    total = 0.0
+    weighted = 0.0
+    for u, v in zip(path[:-1], path[1:]):
+        data = min(G[u][v].values(), key=lambda d: d.get('travel_time', 0))
+        tt = data.get('travel_time', 0.0)
+        weighted += data.get('scenic_score', 0.0) * tt
+        total += tt
+    return weighted / total if total else 0.0
 
 
 def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
-    """Returns (fast_route, scenic_route, fast_minutes, scenic_minutes)."""
+    """Returns (fast_route, scenic_route, fast_minutes, scenic_minutes).
+
+    Adaptive detour search: probe each K in _K_LADDER (scenic_cost =
+    travel_time * exp(K * (1 - scenic_t)); one Dijkstra each), keep candidates
+    within the detour budget, and return the one with the best scenic gain per
+    extra minute. The fast route is the floor candidate, so when no detour is
+    worth it the fast route wins naturally (no cliff fallback).
+    """
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
+    fast_score = _tw_mean_score(G, fast_route)
 
-    try:
-        scenic_route = networkx.shortest_path(G, start, end, weight='scenic_cost')
-    except (networkx.NetworkXNoPath, networkx.NodeNotFound):
-        return fast_route, fast_route, fast_time * 60, fast_time * 60
+    best_route, best_time, best_value = fast_route, fast_time, 0.0
+    seen = {tuple(fast_route)}
+    for K in _K_LADDER:
+        for u, v, k, data in G.edges(data=True, keys=True):
+            data['scenic_cost'] = data['travel_time'] * math.exp(K * (1.0 - data.get('scenic_t', 0.0)))
+        try:
+            route = networkx.shortest_path(G, start, end, weight='scenic_cost')
+        except (networkx.NetworkXNoPath, networkx.NodeNotFound):
+            break
+        key = tuple(route)
+        if key in seen:
+            continue
+        seen.add(key)
+        time = networkx.path_weight(G, route, weight='travel_time')
+        if time > fast_time * max_detour_factor:
+            continue
+        extra_min = max((time - fast_time) * 60, 1.0)
+        value = (_tw_mean_score(G, route) - fast_score) / extra_min
+        if value > best_value:
+            best_route, best_time, best_value = route, time, value
 
-    scenic_time = networkx.path_weight(G, scenic_route, weight='travel_time')
-    if scenic_time > fast_time * max_detour_factor:
-        return fast_route, fast_route, fast_time * 60, fast_time * 60
-
-    return fast_route, scenic_route, fast_time * 60, scenic_time * 60
+    return fast_route, best_route, fast_time * 60, best_time * 60
 
 
 def route_coords(G, route):
