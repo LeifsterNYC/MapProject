@@ -300,3 +300,21 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
         return fast_route, fast_route, fast_time * 60, fast_time * 60
 
     return fast_route, scenic_route, fast_time * 60, scenic_time * 60
+
+
+def route_coords(G, route):
+    """Extract (lat, lon) coords following actual road geometry, not just nodes."""
+    coords = []
+    for i in range(len(route) - 1):
+        u, v = route[i], route[i + 1]
+        edge_data = min(G[u][v].values(), key=lambda d: d.get('travel_time', 0))
+        geom = edge_data.get('geometry')
+        if geom is not None:
+            edge_coords = [(y, x) for x, y in geom.coords]
+        else:
+            edge_coords = [(G.nodes[u]['y'], G.nodes[u]['x']),
+                           (G.nodes[v]['y'], G.nodes[v]['x'])]
+        coords.extend(edge_coords if not coords else edge_coords[1:])
+    if not coords and route:
+        coords.append((G.nodes[route[0]]['y'], G.nodes[route[0]]['x']))
+    return coords

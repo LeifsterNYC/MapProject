@@ -13,7 +13,7 @@ import math
 import requests
 import numpy as np
 from scipy.spatial import KDTree
-from route_planner import initialize_graph, score_scenic_edges, plan_scenic_route
+from route_planner import initialize_graph, score_scenic_edges, plan_scenic_route, route_coords
 
 app = Flask(__name__)
 geolocator = Nominatim(user_agent="ramble_app")
@@ -39,25 +39,6 @@ def _gmaps_url(coords, max_waypoints=8):
     if waypoints:
         url += f"&waypoints={waypoints}"
     return url
-
-
-def _route_coords(G, route):
-    """Extract (lat, lon) coords following actual road geometry, not just node points."""
-    coords = []
-    for i in range(len(route) - 1):
-        u, v = route[i], route[i + 1]
-        edge_data = min(G[u][v].values(), key=lambda d: d.get('travel_time', 0))
-        geom = edge_data.get('geometry')
-        if geom is not None:
-            edge_coords = [(y, x) for x, y in geom.coords]
-        else:
-            edge_coords = [(G.nodes[u]['y'], G.nodes[u]['x']),
-                           (G.nodes[v]['y'], G.nodes[v]['x'])]
-        # Skip the first point on all but the first edge to avoid duplicates
-        coords.extend(edge_coords if not coords else edge_coords[1:])
-    if not coords and route:
-        coords.append((G.nodes[route[0]]['y'], G.nodes[route[0]]['x']))
-    return coords
 
 
 _TOMTOM_KEY = os.environ.get('TOMTOM_API_KEY')
@@ -177,8 +158,8 @@ def _pipeline(start_address, end_address, curviness_weight, nature_weight, road_
     if on_stage:
         on_stage('Computing routes...')
     fast_route, scenic_route, fast_min, scenic_min = plan_scenic_route(graph, start_node, end_node, max_detour)
-    fast_coords = _route_coords(graph, fast_route)
-    scenic_coords = _route_coords(graph, scenic_route)
+    fast_coords = route_coords(graph, fast_route)
+    scenic_coords = route_coords(graph, scenic_route)
     folium.PolyLine(fast_coords, color="blue", weight=3, opacity=0.6, tooltip="Fastest").add_to(route_map)
     folium.PolyLine(scenic_coords, color="green", weight=4, opacity=0.9, tooltip="Scenic").add_to(route_map)
     folium.Marker(location=list(start_coords), popup=start_address).add_to(route_map)
