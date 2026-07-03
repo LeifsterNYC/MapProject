@@ -193,3 +193,23 @@ def test_maxspeed_list_takes_first():
 def test_maxspeed_unparseable_is_none():
     assert _parse_maxspeed_mph("none") is None
     assert _parse_maxspeed_mph(None) is None
+
+
+def test_ref_rescue_norwegian_county_roads():
+    assert _road_type_score({'highway': 'secondary', 'ref': 'Fv 815'}) == 0.8
+    assert _road_type_score({'highway': 'primary', 'ref': 'Rv 15'}) == 0.8
+
+
+def test_ref_rescue_excludes_european_e_roads():
+    # E10 is a trunk-network designation, not a scenic road.
+    assert _road_type_score({'highway': 'primary', 'ref': 'E 10'}) == 0.3
+
+
+def test_ref_rescue_word_boundary():
+    # 'NE 2' must not match the E pattern (or any other).
+    assert _road_type_score({'highway': 'primary', 'ref': 'NE 2'}) == 0.3
+
+
+def test_scenic_yes_tag_boosts_any_class():
+    assert _road_type_score({'highway': 'motorway', 'scenic': 'yes'}) == 0.9
+    assert _road_type_score({'highway': 'residential', 'scenic': 'yes'}) == 0.9

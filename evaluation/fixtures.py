@@ -52,6 +52,17 @@ FIXTURES = [
         "max_detour": 3.0,
     },
     {
+        # NORWAY (international check): Fv 815 along the Vestfjorden shore via
+        # Stamsund — curvier and more scenic than the inland E10, barely
+        # longer. Exercises fjord-coastline water, Fv ref rescue, and km/h
+        # speed parsing.
+        "name": "Henningsvaer -> Ballstad (Fv 815)",
+        "start": "Henningsvær, Norway",
+        "end": "Ballstad, Norway",
+        "via": [("Stamsund, Norway", 2000)],
+        "max_detour": 3.0,
+    },
+    {
         # LONG TRIP (highway-class graph): NY-17 through the Catskills, exit at
         # Hancock onto Rt 97 along the Delaware to Port Jervis, then back east
         # to I-87/Palisades — instead of the I-81/380/80 slog. Generous

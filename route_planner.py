@@ -4,8 +4,14 @@ import folium
 import math
 import os
 import pickle
+import re
 import numpy as np
 from scipy.spatial import KDTree
+
+# Keep the explicit scenic=yes way tag — OSM's direct "this road is scenic"
+# signal, common in Europe. Must be set before any graph fetch.
+if 'scenic' not in osmnx.settings.useful_tags_way:
+    osmnx.settings.useful_tags_way = list(osmnx.settings.useful_tags_way) + ['scenic']
 
 _GRAPH_CACHE: dict = {}
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
@@ -102,11 +108,16 @@ def initialize_graph(start, end):
             # cross-town route). Fetch signal/stop points as features, cluster
             # poles into intersections, and penalize each edge whose end node
             # lands near one — one penalty per intersection crossing.
+            # A failed feature fetch (Overpass rate-limiting) must not get
+            # pickled: the graph would be cached forever with silently-empty
+            # water/viewpoints. Serve it from memory but skip the disk write.
+            features_ok = True
+
             # Long-trip graphs are highway-class only: skip the signal fetch
             # (rarely signalized, and the point fetch at that scale is huge).
             try:
                 if long_trip:
-                    raise ValueError('skip signals in long-trip mode')
+                    raise LookupError('skip signals in long-trip mode')
                 sig_gdf = osmnx.features_from_bbox(
                     (w, s, e, n), tags={'highway': ['traffic_signals', 'stop']}
                 )
@@ -116,8 +127,11 @@ def initialize_graph(start, end):
                               if kind == 'traffic_signals']
                 stop_pts = [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
                             if kind == 'stop']
+            except LookupError:
+                signal_pts, stop_pts = [], []  # intentional long-trip skip
             except Exception:
                 signal_pts, stop_pts = [], []
+                features_ok = False
 
             def _cluster(points, cell_deg=0.0005):
                 """Merge points within ~50 m so multi-pole intersections count once."""
@@ -149,11 +163,13 @@ def initialize_graph(start, end):
             # Collect shoreline/centerline vertices — representative_point lands in the
             # middle of wide rivers (too far from shore for a 400m proximity check).
             try:
-                # Long trips: rivers only — lake/stream polygons at corridor
-                # scale are enormous, and river valleys (Delaware along 97,
-                # Hudson along the Palisades) are the water signal that matters.
-                water_tags = ({'waterway': 'river'} if long_trip else
-                              {'natural': 'water', 'waterway': ['river', 'stream']})
+                # Coastline is included in both modes: fjords and sea shores
+                # are natural=coastline in OSM, not natural=water — without it
+                # a road hugging Geirangerfjord or Vestfjorden gets no water
+                # credit. Long trips skip lakes/streams (enormous at corridor
+                # scale); river valleys + coasts are the signal that matters.
+                water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
+                              {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
                 water_gdf = osmnx.features_from_bbox((w, s, e, n), tags=water_tags)
                 water_points = []
                 for geom in water_gdf.geometry:
@@ -179,6 +195,7 @@ def initialize_graph(start, end):
                         continue
             except Exception:
                 water_points = []
+                features_ok = False
             graph.graph['water_points'] = water_points
 
             # Fetch roadside viewpoints (tourism=viewpoint only — not natural=peak,
@@ -191,6 +208,7 @@ def initialize_graph(start, end):
                 viewpoints = list(zip(pts.y, pts.x))
             except Exception:
                 viewpoints = []
+                features_ok = False
             graph.graph['viewpoints'] = viewpoints
 
             # Fetch natural areas (forests, parks, meadows) for proximity scoring.
@@ -198,7 +216,7 @@ def initialize_graph(start, end):
             # 25,000 km² corridor separates nothing, and the fetch is huge.
             try:
                 if long_trip:
-                    raise ValueError('skip nature in long-trip mode')
+                    raise LookupError('skip nature in long-trip mode')
                 nature_gdf = osmnx.features_from_bbox(
                     (w, s, e, n),
                     tags={
@@ -228,13 +246,20 @@ def initialize_graph(start, end):
                         nature_points.extend((y, x) for x, y in geom_coords[::4])
                     except Exception:
                         continue
+            except LookupError:
+                nature_points = []  # intentional long-trip skip
             except Exception:
                 nature_points = []
+                features_ok = False
             graph.graph['nature_points'] = nature_points
 
-            os.makedirs(_CACHE_DIR, exist_ok=True)
-            with open(cache_file, 'wb') as f:
-                pickle.dump(graph, f)
+            if features_ok:
+                os.makedirs(_CACHE_DIR, exist_ok=True)
+                with open(cache_file, 'wb') as f:
+                    pickle.dump(graph, f)
+            else:
+                print(f"WARNING: feature fetch failed for {bbox_key} — "
+                      f"graph served from memory, NOT cached (retry later)")
         _GRAPH_CACHE[bbox_key] = graph
 
     graph = _GRAPH_CACHE[bbox_key]
@@ -300,6 +325,12 @@ def _curviness_score(data):
     return min(total_deg / length / _CURVE_FULL_SCORE_DEG_PER_M, 1.0)
 
 
+# Numbered-highway refs that mark pleasant country/state routes: US state
+# style (NY 97, US 44, SR 9) and Norwegian riks-/fylkesveier (Rv 15, Fv 815).
+# Word boundaries prevent false hits (e.g. 'NE 2' must not match 'E').
+_SCENIC_REF_RE = re.compile(r'\b(NY|US|SR|Rv|Fv)\s?-?\d', re.IGNORECASE)
+
+
 def _road_type_score(data):
     highway = data.get('highway', 'residential')
     if isinstance(highway, list):
@@ -313,17 +344,25 @@ def _road_type_score(data):
         'living_street': 0.5, 'service': 0.05,
     }
     score = table.get(highway, 0.4)
-    # Scenic state highways carry a state/US route ref but OSM class tags that
-    # score them like traffic arteries or driveways (NY-44/55 and NY-97 are
-    # 'primary' → 0.3; some are even 'residential'). A ref rescue restores
-    # them to country-highway level. Trunk/motorway stay excluded — a ref on a
-    # divided highway (US-209) does not make it scenic.
+    # OSM's explicit scenic tag wins outright — any road class (the Palisades
+    # Parkway is motorway-class and genuinely scenic).
+    scenic = data.get('scenic')
+    if isinstance(scenic, list):
+        scenic = scenic[0]
+    if scenic == 'yes':
+        return max(score, 0.9)
+    # Scenic numbered highways carry a state/county route ref but OSM class
+    # tags that score them like traffic arteries or driveways (NY-44/55 and
+    # NY-97 are 'primary' → 0.3; some are even 'residential'). A ref rescue
+    # restores them to country-highway level. Trunk/motorway stay excluded,
+    # and so are European E-refs — "E 10" is a trunk network designation, not
+    # a scenic road (in Lofoten it is precisely the road to avoid).
     if highway in ('residential', 'unclassified', 'tertiary',
                    'primary', 'secondary', 'primary_link', 'secondary_link'):
         ref = data.get('ref')
         if isinstance(ref, list):
             ref = ref[0]
-        if isinstance(ref, str) and any(p in ref for p in ('NY', 'US', 'SR')):
+        if isinstance(ref, str) and _SCENIC_REF_RE.search(ref):
             score = max(score, 0.8)
     return score
 

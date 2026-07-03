@@ -1,5 +1,9 @@
 """Scenic-route validation harness. Runs every fixture through the routing
-pipeline and prints a scorecard. Usage: python evaluate.py
+pipeline and prints a scorecard.
+
+Usage: python evaluate.py [name-substring]
+An optional argument runs only fixtures whose name contains it (useful when
+one fixture needs a long first-time graph fetch).
 
 Headline columns: cover (waypoint coverage), gain (time-weighted mean scenic
 score, scenic minus fast), xmin (extra minutes spent). Diagnostics: detour
@@ -8,6 +12,7 @@ with low gain means the route is wandering, not scenic).
 """
 import json
 import os
+import sys
 
 import osmnx
 from geopy.geocoders import Nominatim
@@ -90,8 +95,11 @@ def run_fixture(fixture, cache, weights):
 def main():
     cache = _load_cache()
     weights = {"curviness": 1.0, "road_type": 1.0, "nature": 1.0}
+    name_filter = sys.argv[1].lower() if len(sys.argv) > 1 else ""
     rows = []
     for fixture in FIXTURES:
+        if name_filter and name_filter not in fixture["name"].lower():
+            continue
         try:
             rows.append(run_fixture(fixture, cache, weights))
         except Exception as exc:  # report, don't abort the whole run
