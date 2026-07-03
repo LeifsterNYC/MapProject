@@ -28,8 +28,12 @@ FIXTURES = [
         "name": "Accord -> New Paltz (Gunks 44/55)",
         "start": "351 Cooper St, Accord, NY 12404",
         "end": "New Paltz, NY",
-        "via": [("Kerhonkson, NY", 1200),
-                ("Minnewaska State Park Preserve", 2500)],
+        # NB: name-based via points failed twice here: "Minnewaska State Park
+        # Preserve" geocodes to the roadless park interior, and "Minnewaska
+        # Trail" matches a residential road in Kerhonkson town. Use an explicit
+        # point on the US-44/NY-55 ridge (near the Minnewaska viewpoints), and
+        # skip Kerhonkson town — the natural scenic approach passes east of it.
+        "via": [("US 44/NY 55 Gunks ridge", 1500, (41.735, -74.19))],
         "max_detour": 3.0,
     },
     {

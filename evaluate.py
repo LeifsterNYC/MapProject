@@ -16,7 +16,7 @@ from route_planner import initialize_graph, score_scenic_edges, plan_scenic_rout
 from evaluation.fixtures import FIXTURES
 from evaluation.metrics import (
     waypoint_coverage, shared_node_fraction, shared_length_fraction,
-    detour_ratio, mean_scenic_score,
+    detour_ratio, mean_scenic_score, geo_dist_m,
 )
 
 _GEO = Nominatim(user_agent="ramble_eval")
@@ -49,11 +49,26 @@ def geocode(name, cache):
 def run_fixture(fixture, cache, weights):
     start = geocode(fixture["start"], cache)
     end = geocode(fixture["end"], cache)
-    via = [(geocode(name, cache), threshold) for name, threshold in fixture.get("via", [])]
+    # via entries: (name, threshold_m) geocoded by name, or
+    # (label, threshold_m, (lat, lon)) with an explicit reference point for
+    # places whose names geocode badly.
+    via = [(entry[2] if len(entry) > 2 else geocode(entry[0], cache), entry[1])
+           for entry in fixture.get("via", [])]
 
     G, _ = initialize_graph(start, end)
     start_node = osmnx.distance.nearest_nodes(G, X=[start[1]], Y=[start[0]])[0]
     end_node = osmnx.distance.nearest_nodes(G, X=[end[1]], Y=[end[0]])[0]
+
+    # Snap guard: a via point that geocodes far from any road (e.g. a park
+    # interior) can never be covered — fail loudly instead of reporting a
+    # misleading 0.00 coverage.
+    for (point, threshold), (name, *_rest) in zip(via, fixture.get("via", [])):
+        node = osmnx.distance.nearest_nodes(G, X=[point[1]], Y=[point[0]])[0]
+        snap_m = geo_dist_m(point, (G.nodes[node]['y'], G.nodes[node]['x']))
+        if snap_m > threshold:
+            raise ValueError(
+                f"via '{name}' lands {snap_m:.0f} m from the road network "
+                f"(> {threshold:.0f} m threshold) — bad reference point")
 
     score_scenic_edges(G, weights)
     fast, scenic, fast_min, scenic_min = plan_scenic_route(
