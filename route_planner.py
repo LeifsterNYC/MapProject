@@ -197,22 +197,60 @@ def initialize_graph(start, end):
     return graph, route_map
 
 
+# Full-score curviness: accumulated bearing change per metre of road.
+# 0.30 deg/m = 30 degrees per 100 m sustained — a genuinely twisty road.
+_CURVE_FULL_SCORE_DEG_PER_M = 0.30
+# Segments shorter than this are merged before computing bearings, and
+# deflections smaller than the noise floor are ignored: OSM geometry is
+# hand-digitized and tiny vertex jitter would otherwise accumulate.
+_CURVE_MIN_SEG_M = 15.0
+_CURVE_NOISE_DEG = 5.0
+
+
 def _curviness_score(data):
+    """Bearing-change density along the edge geometry, scaled to [0, 1].
+
+    Chord ratio (length/straight - 1) is blind to ordinary winding roads:
+    OSMnx edges end at intersections, and a road that snakes but progresses
+    scores ~0 (measured 0.006-0.03 across whole graphs). Summing heading
+    changes measures what a driver feels.
+    """
     geom = data.get('geometry')
     length = data.get('length', 0)
-    if geom is None or length < 10:
+    if geom is None or length < 3 * _CURVE_MIN_SEG_M:
         return 0.0
     coords = list(geom.coords)
-    if len(coords) < 2:
+    if len(coords) < 3:
         return 0.0
-    dx = coords[-1][0] - coords[0][0]
-    dy = coords[-1][1] - coords[0][1]
-    lat_avg = (coords[0][1] + coords[-1][1]) / 2.0
-    meters_per_lon = 111320 * math.cos(math.radians(lat_avg))
-    straight_dist = math.sqrt((dx * meters_per_lon) ** 2 + (dy * 111320) ** 2)
-    if straight_dist < 1:
-        return 1.0
-    return min(max(length / straight_dist - 1.0, 0.0), 1.0)
+    lat_ref = coords[0][1]
+    lon_m = 111320.0 * math.cos(math.radians(lat_ref))
+    lat_m = 111320.0
+
+    # Thin vertices so every retained segment is at least _CURVE_MIN_SEG_M.
+    pts = [(coords[0][0] * lon_m, coords[0][1] * lat_m)]
+    for x, y in coords[1:]:
+        px, py = x * lon_m, y * lat_m
+        lx, ly = pts[-1]
+        if math.hypot(px - lx, py - ly) >= _CURVE_MIN_SEG_M:
+            pts.append((px, py))
+    if len(pts) < 3:
+        return 0.0
+
+    total_deg = 0.0
+    prev_bearing = None
+    for i in range(1, len(pts)):
+        dx = pts[i][0] - pts[i - 1][0]
+        dy = pts[i][1] - pts[i - 1][1]
+        bearing = math.degrees(math.atan2(dy, dx))
+        if prev_bearing is not None:
+            turn = abs(bearing - prev_bearing)
+            if turn > 180.0:
+                turn = 360.0 - turn
+            if turn > _CURVE_NOISE_DEG:
+                total_deg += turn
+        prev_bearing = bearing
+
+    return min(total_deg / length / _CURVE_FULL_SCORE_DEG_PER_M, 1.0)
 
 
 def _road_type_score(data):
@@ -318,6 +356,11 @@ def score_scenic_edges(G, weights: dict) -> None:
     W_SPEED, W_TRAFFIC, W_WATER, W_VIEW = 1.0, 0.5, 0.5, 2.0
     CURVE_BOOST, NATURE_DAMP = 2.5, 0.5
     VIEW_BAND_M = 600.0
+    # Viewpoint-cluster bonus: a road with several overlooks nearby (the 44/55
+    # ridge has up to 7 within 1 km; ordinary roads have 0) is a destination
+    # drive. Threshold >= 3 qualifies only 1.7% of edges in viewpoint-rich
+    # graphs and none elsewhere — surgical, no wandering collateral.
+    W_VIEWCNT, VCNT_BAND_M, VCNT_THRESH = 3.0, 1000.0, 3
 
     # Project to metres using a single reference latitude (error < 0.5% over 50-mile bbox).
     ref_lat = sum(d.get('y', 0) for _, d in list(G.nodes(data=True))[:200]) / 200
@@ -355,6 +398,11 @@ def score_scenic_edges(G, weights: dict) -> None:
     water_rel = relative_proximity_scores(dists_to(water_tree))
     nature_rel = relative_proximity_scores(dists_to(nature_tree))
     view_abs = np.maximum(0.0, 1.0 - dists_to(view_tree) / VIEW_BAND_M)
+    if view_tree is not None:
+        vcount = np.asarray(view_tree.query_ball_point(mids_m, r=VCNT_BAND_M, return_length=True))
+    else:
+        vcount = np.zeros(len(mids))
+    vcnt_term = (vcount >= VCNT_THRESH).astype(float)
 
     # Urban anti-wandering gate: in dense street grids the water/nature/curviness
     # bonuses reward pointless zigzagging through city blocks (measured on the
@@ -370,16 +418,22 @@ def score_scenic_edges(G, weights: dict) -> None:
     scores = np.empty(len(edges))
     for i, (u, v, k, data) in enumerate(edges):
         g = float(gate[i])
+        road = _road_type_score(data)
+        # Curviness only counts on roads worth driving: curvy driveways,
+        # cul-de-sacs and parking loops saturate the bearing metric (21% of
+        # edges score >0.3) and must not become scenic attractors.
+        curve = _curviness_score(data) if road >= 0.5 else 0.0
         scores[i] = (
             g * (
-                CURVE_BOOST * w_curve * _curviness_score(data) +
+                CURVE_BOOST * w_curve * curve +
                 NATURE_DAMP * w_nature * float(nature_rel[i]) +
                 W_WATER * float(water_rel[i])
             ) +
-            w_road * _road_type_score(data) +
+            w_road * road +
             W_SPEED * _speed_score(data) +
             W_TRAFFIC * _traffic_score(data) +
-            W_VIEW * float(view_abs[i])
+            W_VIEW * float(view_abs[i]) +
+            W_VIEWCNT * float(vcnt_term[i])
         )
 
     # Empirical normalization: percentile-rank the total score across the graph.
@@ -401,18 +455,19 @@ def score_scenic_edges(G, weights: dict) -> None:
 # on the trip), so we probe a ladder and pick the best route within budget.
 _K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
 
-# Detour budget: multiplicative cap OR additive slack, whichever is larger.
-# A 3x cap on a 5-minute trip is only +10 minutes — no rural detour is
-# reachable — while real drivers happily spend an extra quarter hour.
-_DETOUR_SLACK_HR = 15 / 60
+# Detour budget: additive, ceilinged at 12 extra minutes. A multiplicative
+# cap is wrong at both ends — too tight on a 5-minute trip (no rural detour
+# reachable) and so loose on a 20+ minute trip that 19-minute twisty
+# excursions slip in. Calibration showed no 4/4 window exists with a
+# multiplicative cap; every legitimate known-good detour is <= ~10 min extra.
+_DETOUR_SLACK_HR = 12 / 60
 
 # Selection objective: scenic gain minus a flat per-minute time penalty.
-# Calibrated by grid search over the fixture candidate tables: 0.0183 is the
-# center of the only window ([0.0178, 0.0189]) where all four fixtures pick
-# the right route — known-good 10-12 min detours (Sand Bank, Gunks 44/55)
-# win while longer excursions and the Taughannock horseshoe lose. The window
-# is narrow; re-run `python evaluate.py` after ANY scoring change.
-_TIME_PENALTY_PER_MIN = 0.0183  # scenic-score units per extra minute
+# Calibrated by grid search over the fixture candidate tables with live
+# curviness + the viewpoint-cluster term + the additive budget: the 4/4
+# window is (0, 0.0264], and 0.013 is its center. Re-run `python evaluate.py`
+# after ANY scoring change.
+_TIME_PENALTY_PER_MIN = 0.013  # scenic-score units per extra minute
 
 
 def _trim_to_simple(route):
@@ -492,7 +547,9 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
     fast_score = _tw_mean_score(G, fast_route)
-    budget = max(fast_time * max_detour_factor, fast_time + _DETOUR_SLACK_HR)
+    # The max_detour slider can tighten the budget below the 12-min ceiling
+    # (matters on short trips) but never extend it beyond.
+    budget = fast_time + min(fast_time * (max_detour_factor - 1.0), _DETOUR_SLACK_HR)
 
     candidates = []
     seen = {tuple(fast_route)}

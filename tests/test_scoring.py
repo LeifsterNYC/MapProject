@@ -54,11 +54,12 @@ def test_plan_scenic_route_takes_worthwhile_detour():
     assert scenic_min > fast_min
 
 
-def test_plan_scenic_route_additive_slack_beats_tight_multiplier():
-    # Cap 1.5x = 9 min < loop's 12 min, but additive slack (+15 min) admits it.
+def test_plan_scenic_route_tight_slider_rejects_loop():
+    # Tight slider (1.5): budget 6 + min(3, 12) = 9 min rejects the 12-min loop
+    # (the default 3.0 admits it — covered by the worthwhile-detour test).
     G = _detour_graph()
     _, scenic, _, _ = plan_scenic_route(G, 1, 5, 1.5)
-    assert scenic == [1, 3, 4, 5]
+    assert scenic == [1, 2, 5]
 
 
 def test_plan_scenic_route_skips_worthless_detour():
@@ -100,3 +101,39 @@ def test_road_type_ref_rescue_primary():
     assert _road_type_score({'highway': 'primary'}) == 0.3
     # ...but trunk/motorway never are.
     assert _road_type_score({'highway': 'trunk', 'ref': 'US 209'}) == 0.15
+
+
+from shapely.geometry import LineString
+from route_planner import _curviness_score
+
+
+def _edge(coords_lonlat, length_m):
+    return {'geometry': LineString(coords_lonlat), 'length': length_m}
+
+
+def test_curviness_straight_road_is_zero():
+    # 1 km due east at the equator: no bearing change.
+    e = _edge([(0.0, 0.0), (0.005, 0.0), (0.009, 0.0)], 1000.0)
+    assert _curviness_score(e) == 0.0
+
+
+def test_curviness_hairpin_scores_high():
+    # Out east 200m, hairpin, back west 200m: ~180 degrees over ~400m.
+    e = _edge([(0.0, 0.0), (0.0018, 0.0), (0.0018, 0.0002), (0.0, 0.0002)], 400.0)
+    assert _curviness_score(e) > 0.8
+
+
+def test_curviness_gentle_curve_is_moderate():
+    # ~45 degree total bend over ~700m.
+    e = _edge([(0.0, 0.0), (0.003, 0.0), (0.006, 0.0021)], 700.0)
+    score = _curviness_score(e)
+    assert 0.1 < score < 0.7
+
+
+def test_curviness_no_geometry_is_zero():
+    assert _curviness_score({'length': 500.0}) == 0.0
+
+
+def test_curviness_short_stub_is_zero():
+    e = _edge([(0.0, 0.0), (0.00005, 0.00002)], 6.0)
+    assert _curviness_score(e) == 0.0
