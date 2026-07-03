@@ -45,11 +45,16 @@ LONG_TRIP_MILES = 55
 
 # Overpass endpoints, tried in order — the main instance sheds heavy queries
 # under load (connection refused); Kumi is slower but tolerant.
+# NB: do NOT change osmnx.settings.requests_timeout — it is embedded in the
+# Overpass query string ([timeout:N]) and therefore in the response cache
+# key; changing it orphans every locally cached response.
+# Base URLs — osmnx appends /interpreter and /status itself. (The main
+# entry must equal osmnx's default exactly: the full request URL is the
+# response cache key, so any difference orphans the local cache.)
 _OVERPASS_ENDPOINTS = (
-    'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter',
+    'https://overpass-api.de/api',
+    'https://overpass.kumi.systems/api',
 )
-osmnx.settings.requests_timeout = 300
 
 
 def _with_overpass_fallback(fn):
