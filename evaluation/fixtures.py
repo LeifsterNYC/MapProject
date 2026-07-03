@@ -52,14 +52,15 @@ FIXTURES = [
         "max_detour": 3.0,
     },
     {
-        # NORWAY (international check): Fv 815 along the Vestfjorden shore via
-        # Stamsund — curvier and more scenic than the inland E10, barely
-        # longer. Exercises fjord-coastline water, Fv ref rescue, and km/h
-        # speed parsing.
+        # NORWAY (international check): Fv 815 along the Vestfjorden shore —
+        # curvier and more scenic than the inland E10, barely longer.
+        # Exercises fjord-coastline water, numeric-ref rescue, km/h parsing.
+        # NB: Stamsund village is on a dead-end Fv 817 spur 4.1 km off the
+        # 815 — reference the road itself (same lesson as Minnewaska).
         "name": "Henningsvaer -> Ballstad (Fv 815)",
         "start": "Henningsvær, Norway",
         "end": "Ballstad, Norway",
-        "via": [("Stamsund, Norway", 2000)],
+        "via": [("Fv 815 Vestfjorden corridor", 2000, (68.156, 13.780))],
         "max_detour": 3.0,
     },
     {

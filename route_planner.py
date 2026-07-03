@@ -39,7 +39,31 @@ DEFAULT_SPEEDS = {
 # a highway-class-only network over the bbox, river + viewpoint features
 # only, no signal fetch. At that scale the scenic decision is which
 # corridors to take (NY-17 vs I-380/80, Rt 97 vs I-84), not side streets.
-LONG_TRIP_MILES = 45
+# 55 keeps Hancock->Port Jervis (50.4 mi, the largest proven full-detail
+# graph) in short mode.
+LONG_TRIP_MILES = 55
+
+# Overpass endpoints, tried in order — the main instance sheds heavy queries
+# under load (connection refused); Kumi is slower but tolerant.
+_OVERPASS_ENDPOINTS = (
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+)
+osmnx.settings.requests_timeout = 300
+
+
+def _with_overpass_fallback(fn):
+    """Run an Overpass-backed call, rotating endpoints on failure."""
+    last_exc = None
+    for url in _OVERPASS_ENDPOINTS:
+        osmnx.settings.overpass_url = url
+        try:
+            return fn()
+        except _EmptyResponse:
+            raise
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
 
 _SHORT_FILTER = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
 _LONG_FILTER = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|motorway_link|trunk_link|primary_link|secondary_link"]["access"!~"private"]'
@@ -87,7 +111,7 @@ def _fetch_features(bbox, tags, retries=2, pause_s=20):
     """
     for attempt in range(retries):
         try:
-            return [osmnx.features_from_bbox(bbox, tags=tags)], True
+            return [_with_overpass_fallback(lambda: osmnx.features_from_bbox(bbox, tags=tags))], True
         except _EmptyResponse:
             return [], True
         except Exception:
@@ -95,7 +119,8 @@ def _fetch_features(bbox, tags, retries=2, pause_s=20):
     gdfs, ok = [], True
     for key, val in tags.items():
         try:
-            gdfs.append(osmnx.features_from_bbox(bbox, tags={key: val}))
+            gdfs.append(_with_overpass_fallback(
+                lambda k=key, v=val: osmnx.features_from_bbox(bbox, tags={k: v})))
         except _EmptyResponse:
             continue
         except Exception:
@@ -149,7 +174,8 @@ def initialize_graph(start, end):
                 graph = pickle.load(f)
         else:
             filt = _LONG_FILTER if long_trip else _SHORT_FILTER
-            graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=filt)
+            graph = _with_overpass_fallback(lambda: osmnx.graph_from_bbox(
+                (w, s, e, n), simplify=True, network_type='drive', custom_filter=filt))
 
             for u, v, k, data in graph.edges(data=True, keys=True):
                 highway = data.get('highway', 'residential')
