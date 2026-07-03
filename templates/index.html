@@ -190,8 +190,36 @@
     }
 
     /* ── Address inputs ───────────────────────────── */
-    .field { display: flex; flex-direction: column; gap: 0.32rem; }
+    .field { display: flex; flex-direction: column; gap: 0.32rem; position: relative; }
     .field + .field { margin-top: 0.85rem; }
+
+    .suggest-box {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      background: var(--input-bg);
+      border: 1px solid var(--border-dark);
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .suggest-box.open { display: block; }
+
+    .suggest-item {
+      padding: 0.45rem 0.6rem;
+      font-size: 0.62rem;
+      line-height: 1.35;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .suggest-item:last-child { border-bottom: none; }
+    .suggest-item:hover, .suggest-item.sel {
+      background: var(--ink);
+      color: var(--bg);
+    }
 
     .field label {
       font-size: 0.52rem;
@@ -559,12 +587,14 @@
           <div class="field">
             <label for="start_address">From</label>
             <input type="text" id="start_address" name="start_address"
-                   placeholder="Starting address">
+                   placeholder="Starting address" autocomplete="off">
+            <div class="suggest-box" id="suggest_start"></div>
           </div>
           <div class="field">
             <label for="end_address">To</label>
             <input type="text" id="end_address" name="end_address"
-                   placeholder="Destination">
+                   placeholder="Destination" autocomplete="off">
+            <div class="suggest-box" id="suggest_end"></div>
           </div>
         </div>
 
@@ -745,6 +775,68 @@
         overlay.classList.remove('active');
       };
     });
+
+    // ── Address autocomplete ──────────────────────────
+    function wireSuggest(inputId, boxId) {
+      var input = document.getElementById(inputId);
+      var box = document.getElementById(boxId);
+      var timer = null;
+      var selIdx = -1;
+
+      function close() { box.classList.remove('open'); box.innerHTML = ''; selIdx = -1; }
+
+      function render(items) {
+        if (!items.length) { close(); return; }
+        box.innerHTML = '';
+        items.forEach(function(text) {
+          var div = document.createElement('div');
+          div.className = 'suggest-item';
+          div.textContent = text;
+          // mousedown fires before the input's blur closes the box
+          div.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            input.value = text;
+            close();
+          });
+          box.appendChild(div);
+        });
+        box.classList.add('open');
+      }
+
+      input.addEventListener('input', function() {
+        clearTimeout(timer);
+        var q = input.value.trim();
+        if (q.length < 3) { close(); return; }
+        timer = setTimeout(function() {
+          fetch('/suggest?q=' + encodeURIComponent(q))
+            .then(function(r) { return r.json(); })
+            .then(function(data) { render(data.suggestions || []); })
+            .catch(close);
+        }, 400);
+      });
+
+      input.addEventListener('keydown', function(e) {
+        var items = box.querySelectorAll('.suggest-item');
+        if (!items.length) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          selIdx = e.key === 'ArrowDown'
+            ? Math.min(selIdx + 1, items.length - 1)
+            : Math.max(selIdx - 1, 0);
+          items.forEach(function(it, i) { it.classList.toggle('sel', i === selIdx); });
+        } else if (e.key === 'Enter' && selIdx >= 0) {
+          e.preventDefault();
+          input.value = items[selIdx].textContent;
+          close();
+        } else if (e.key === 'Escape') {
+          close();
+        }
+      });
+
+      input.addEventListener('blur', function() { setTimeout(close, 150); });
+    }
+    wireSuggest('start_address', 'suggest_start');
+    wireSuggest('end_address', 'suggest_end');
 
     // ── Criterion step buttons ────────────────────────
     document.querySelectorAll('.step-btn').forEach(function(btn) {

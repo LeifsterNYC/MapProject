@@ -22,7 +22,7 @@ if 'scenic' not in osmnx.settings.useful_tags_way:
 
 _GRAPH_CACHE: dict = {}
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
-_CACHE_VERSION = 5  # Bump to invalidate all on-disk caches when fetched data changes.
+_CACHE_VERSION = 6  # Bump to invalidate all on-disk caches when fetched data changes.
 _SIGNAL_DELAY_HR = 35 / 3600  # 35-second stop penalty at signalized intersections.
 _STOP_DELAY_HR = 12 / 3600    # 12-second penalty at stop signs.
 
@@ -133,6 +133,29 @@ def _fetch_features(bbox, tags, retries=2, pause_s=20):
     return gdfs, ok
 
 
+def _fetch_features_tiled(bbox, tags, tile_deg=0.7):
+    """Fetch features over a large bbox as a grid of small tile queries.
+
+    Overpass enforces per-IP resource quotas: corridor-scale single queries
+    get shed under quota pressure while small ones keep passing. Tiling keeps
+    every request below that bar. Returns (list_of_gdfs, ok).
+    """
+    w, s, e, n = bbox
+    gdfs, ok = [], True
+    lat = s
+    while lat < n:
+        lon = w
+        lat_hi = min(lat + tile_deg, n)
+        while lon < e:
+            lon_hi = min(lon + tile_deg, e)
+            tile_gdfs, tile_ok = _fetch_features((lon, lat, lon_hi, lat_hi), tags, retries=1)
+            gdfs.extend(tile_gdfs)
+            ok = ok and tile_ok
+            lon = lon_hi
+        lat = lat_hi
+    return gdfs, ok
+
+
 def _polygon_points(gdfs, subsample=4):
     """Extract (lat, lon) vertices from feature geometries (any gdf list)."""
     points = []
@@ -160,12 +183,57 @@ def _polygon_points(gdfs, subsample=4):
     return points
 
 
+def bbox_for(start, end, buffer_lat=0.1):
+    """Isotropic bbox: the longitude buffer is scaled by 1/cos(latitude) so
+    the margin is ~11 km in every direction. A plain 0.1-degree buffer is
+    only ~4.5 km of longitude at 68N — it clipped the sole road connecting
+    Henningsvaer just outside the box, and OSMnx then silently dropped the
+    village's entire (now disconnected) street network.
+    """
+    mid_lat = (start[0] + end[0]) / 2
+    buffer_lon = min(buffer_lat / max(math.cos(math.radians(mid_lat)), 0.2), 0.5)
+    n = max(start[0], end[0]) + buffer_lat
+    s = min(start[0], end[0]) - buffer_lat
+    e = max(start[1], end[1]) + buffer_lon
+    w = min(start[1], end[1]) - buffer_lon
+    return n, s, e, w
+
+
+def _fetch_connected_graph(start, end, long_trip):
+    """Fetch a graph in which start and end are mutually reachable.
+
+    A fixed-margin bbox fails in fjord/island country: the only road linking
+    two towns can loop outside the box (E10 over Gimsøya between Henningsvær
+    and Ballstad), leaving one side a disconnected fragment that OSMnx's
+    largest-component pruning silently deletes — routes then snap kilometres
+    away. So: fetch with all components retained, snap the endpoints, and if
+    they cannot reach each other, widen the buffer and refetch. Finally prune
+    to the endpoints' strongly connected component so stray fragments do not
+    pollute percentile scoring or anchor selection.
+    """
+    filt = _LONG_FILTER if long_trip else _SHORT_FILTER
+    graph = None
+    bbox = None
+    for factor in (1, 2, 4):
+        n, s, e, w = bbox_for(start, end, buffer_lat=0.1 * factor)
+        graph = _with_overpass_fallback(lambda: osmnx.graph_from_bbox(
+            (w, s, e, n), simplify=True, network_type='drive',
+            custom_filter=filt, retain_all=True))
+        bbox = (n, s, e, w)
+        start_node = osmnx.distance.nearest_nodes(graph, X=[start[1]], Y=[start[0]])[0]
+        end_node = osmnx.distance.nearest_nodes(graph, X=[end[1]], Y=[end[0]])[0]
+        for scc in networkx.strongly_connected_components(graph):
+            if start_node in scc:
+                if end_node in scc:
+                    return graph.subgraph(scc).copy(), bbox
+                break
+    # Best effort: no buffer connected them — keep the largest component.
+    largest = max(networkx.strongly_connected_components(graph), key=len)
+    return graph.subgraph(largest).copy(), bbox
+
+
 def initialize_graph(start, end):
-    buffer = 0.1
-    n = max(start[0], end[0]) + buffer
-    s = min(start[0], end[0]) - buffer
-    e = max(start[1], end[1]) + buffer
-    w = min(start[1], end[1]) - buffer
+    n, s, e, w = bbox_for(start, end)
     long_trip = _straight_miles(start, end) > LONG_TRIP_MILES
 
     # Round to 2 decimal places (~1 km) so nearby routes share a cache entry.
@@ -178,9 +246,7 @@ def initialize_graph(start, end):
             with open(cache_file, 'rb') as f:
                 graph = pickle.load(f)
         else:
-            filt = _LONG_FILTER if long_trip else _SHORT_FILTER
-            graph = _with_overpass_fallback(lambda: osmnx.graph_from_bbox(
-                (w, s, e, n), simplify=True, network_type='drive', custom_filter=filt))
+            graph, (n, s, e, w) = _fetch_connected_graph(start, end, long_trip)
 
             for u, v, k, data in graph.edges(data=True, keys=True):
                 highway = data.get('highway', 'residential')
@@ -254,13 +320,15 @@ def initialize_graph(start, end):
             # valleys + coasts are the signal that matters.
             water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
                           {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
-            gdfs, ok = _fetch_features((w, s, e, n), water_tags)
+            fetch_water = _fetch_features_tiled if long_trip else _fetch_features
+            gdfs, ok = fetch_water((w, s, e, n), water_tags)
             features_ok = features_ok and ok
             graph.graph['water_points'] = _polygon_points(gdfs)
 
             # Fetch roadside viewpoints (tourism=viewpoint only — not natural=peak,
             # which are tagged on mountain tops far from roads).
-            gdfs, ok = _fetch_features((w, s, e, n), {'tourism': ['viewpoint', 'scenic_viewpoint']})
+            fetch_vp = _fetch_features_tiled if long_trip else _fetch_features
+            gdfs, ok = fetch_vp((w, s, e, n), {'tourism': ['viewpoint', 'scenic_viewpoint']})
             features_ok = features_ok and ok
             viewpoints = []
             for vp_gdf in gdfs:
@@ -588,6 +656,11 @@ _DETOUR_SLACK_FRAC = 0.20
 # after ANY scoring change.
 _TIME_PENALTY_PER_MIN = 0.013  # scenic-score units per extra minute
 
+# Dead-band: a candidate must beat the fast route by at least this much to
+# replace it. Near-zero-value winners are noise — e.g. a pointless one-block
+# swap in Leknes worth +0.04 for +30 s. Genuine detours score 0.4-1.0.
+_MIN_SCENIC_VALUE = 0.05
+
 
 def _trim_to_simple(route):
     """Collapse repeated-node cycles so an out-and-back anchor leg becomes a
@@ -706,7 +779,7 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
             # through while dropping the pointless spur to the anchor itself.
             consider(_trim_to_simple(leg_in + leg_out[1:]))
 
-    best_route, best_time, best_value = fast_route, fast_time, 0.0
+    best_route, best_time, best_value = fast_route, fast_time, _MIN_SCENIC_VALUE
     for route in candidates:
         time = networkx.path_weight(G, route, weight='travel_time')
         if time > budget:

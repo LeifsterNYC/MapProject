@@ -220,3 +220,30 @@ def test_ref_rescue_bare_numeric_county_roads():
     assert _road_type_score({'highway': 'primary', 'ref': '815'}) == 0.8
     # E-roads still excluded ('E 10' is not bare digits).
     assert _road_type_score({'highway': 'trunk', 'ref': 'E 10'}) == 0.15
+
+
+from route_planner import bbox_for
+
+
+def test_bbox_lon_buffer_scales_with_latitude():
+    # At 68N, 0.1 deg of lon is ~4.5 km; the buffer must widen to stay ~11 km.
+    n, s, e, w = bbox_for((68.15, 14.20), (68.08, 13.53))
+    assert (e - 14.20) > 0.25
+    # At the equator lon and lat buffers match.
+    n2, s2, e2, w2 = bbox_for((0.0, 10.0), (0.5, 10.5))
+    assert abs((e2 - 10.5) - 0.1) < 1e-4
+
+
+def test_marginal_gain_stays_on_fast_route():
+    # Value below the dead-band (0.05): a tiny wiggle must not replace fast.
+    G = _detour_graph()
+    for u, v, k, d in G.edges(data=True, keys=True):
+        if d['scenic_t'] > 0.5:
+            d['scenic_score'] = 1.30  # gain 0.3 - penalty 0.078 = 0.22 > band: takes it
+    _, scenic, _, _ = plan_scenic_route(G, 1, 5, 3.0)
+    assert scenic == [1, 3, 4, 5]
+    for u, v, k, d in G.edges(data=True, keys=True):
+        if d['scenic_t'] > 0.5:
+            d['scenic_score'] = 1.10  # gain 0.1 - 0.078 = 0.022 < band: stays fast
+    _, scenic, _, _ = plan_scenic_route(G, 1, 5, 3.0)
+    assert scenic == [1, 2, 5]

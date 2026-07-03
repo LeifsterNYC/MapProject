@@ -13,7 +13,7 @@ import math
 import requests
 import numpy as np
 from scipy.spatial import KDTree
-from route_planner import initialize_graph, score_scenic_edges, plan_scenic_route, route_coords
+from route_planner import initialize_graph, score_scenic_edges, plan_scenic_route, route_coords, bbox_for
 
 app = Flask(__name__)
 geolocator = Nominatim(user_agent="ramble_app")
@@ -139,11 +139,7 @@ def _pipeline(start_address, end_address, curviness_weight, nature_weight, road_
     end_node = osmnx.distance.nearest_nodes(graph, X=[end_coords[1]], Y=[end_coords[0]])[0]
 
     # Apply real-time road closures before scoring/routing so both routes avoid them
-    buffer = 0.1
-    n = max(start_coords[0], end_coords[0]) + buffer
-    s = min(start_coords[0], end_coords[0]) - buffer
-    e = max(start_coords[1], end_coords[1]) + buffer
-    w = min(start_coords[1], end_coords[1]) - buffer
+    n, s, e, w = bbox_for(start_coords, end_coords)
     saved_times = {}
     if use_tomtom:
         if on_stage:
@@ -226,6 +222,19 @@ def stream():
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )
+
+
+@app.route('/suggest')
+def suggest():
+    """Address autocomplete: proxy a Nominatim search, return display names."""
+    q = (request.args.get('q') or '').strip()
+    if len(q) < 3:
+        return {'suggestions': []}
+    try:
+        results = geolocator.geocode(q, exactly_one=False, limit=5) or []
+    except Exception:
+        results = []
+    return {'suggestions': [r.address for r in results]}
 
 
 @app.route('/', methods=['GET', 'POST'])
