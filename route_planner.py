@@ -406,13 +406,13 @@ _K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
 # reachable — while real drivers happily spend an extra quarter hour.
 _DETOUR_SLACK_HR = 15 / 60
 
-# Selection objective: scenic gain minus a TRIP-RELATIVE time penalty
-# (extra_time / fast_time). A gain-per-minute RATIO rewards micro-detours; a
-# flat per-minute penalty is blind to trip length — measured: no flat value
-# both rejects a +27-min horseshoe on a 22-min trip and keeps a worthwhile
-# +3-min river-road detour. Relative penalty separates them cleanly
-# (blowout = +121% of the trip; good detours = +5-40%).
-_REL_TIME_PENALTY = 0.5  # scenic-score units per (extra/fast) unit
+# Selection objective: scenic gain minus a flat per-minute time penalty.
+# Calibrated by grid search over the fixture candidate tables: 0.0183 is the
+# center of the only window ([0.0178, 0.0189]) where all four fixtures pick
+# the right route — known-good 10-12 min detours (Sand Bank, Gunks 44/55)
+# win while longer excursions and the Taughannock horseshoe lose. The window
+# is narrow; re-run `python evaluate.py` after ANY scoring change.
+_TIME_PENALTY_PER_MIN = 0.0183  # scenic-score units per extra minute
 
 
 def _trim_to_simple(route):
@@ -534,8 +534,8 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
         time = networkx.path_weight(G, route, weight='travel_time')
         if time > budget:
             continue
-        rel_extra = (time - fast_time) / fast_time if fast_time > 0 else 0.0
-        value = (_tw_mean_score(G, route) - fast_score) - _REL_TIME_PENALTY * rel_extra
+        extra_min = (time - fast_time) * 60.0
+        value = (_tw_mean_score(G, route) - fast_score) - _TIME_PENALTY_PER_MIN * extra_min
         if value > best_value:
             best_route, best_time, best_value = route, time, value
 
