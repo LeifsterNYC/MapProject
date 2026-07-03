@@ -137,3 +137,59 @@ def test_curviness_no_geometry_is_zero():
 def test_curviness_short_stub_is_zero():
     e = _edge([(0.0, 0.0), (0.00005, 0.00002)], 6.0)
     assert _curviness_score(e) == 0.0
+
+
+from route_planner import _straight_miles, LONG_TRIP_MILES
+
+
+def test_straight_miles_known_distance():
+    # Ithaca to Columbus Circle NYC: ~174 miles straight-line.
+    d = _straight_miles((42.454, -76.485), (40.768, -73.982))
+    assert 165 < d < 185
+
+
+def test_long_trip_threshold_classification():
+    ithaca, nyc = (42.454, -76.485), (40.768, -73.982)
+    taughannock = (42.547, -76.607)
+    assert _straight_miles(ithaca, nyc) > LONG_TRIP_MILES
+    assert _straight_miles(ithaca, taughannock) < LONG_TRIP_MILES
+
+
+def test_budget_scales_with_trip_length():
+    # 3-hour fast trip: slack = 20% = 36 min, so a +30-min detour with real
+    # gain is admitted; on the 6-min synthetic trip the 12-min ceiling holds.
+    G = nx.MultiDiGraph()
+    for u, v, tt_min, t, score in [
+        (1, 2, 90.0, 0.2, 1.0), (2, 5, 90.0, 0.2, 1.0),      # fast: 180 min
+        (1, 3, 70.0, 0.99, 3.0), (3, 4, 70.0, 0.99, 3.0),    # scenic: 210 min
+        (4, 5, 70.0, 0.99, 3.0),
+    ]:
+        G.add_edge(u, v, travel_time=tt_min / 60, scenic_t=t, scenic_score=score,
+                   length=1000.0)
+    for node in G.nodes:
+        G.nodes[node]['y'] = 42.0 + node * 0.01
+        G.nodes[node]['x'] = -76.0
+    _, scenic, fast_min, scenic_min = plan_scenic_route(G, 1, 5, 3.0)
+    assert scenic == [1, 3, 4, 5]  # +30 min on a 3-hour trip: within 20% slack
+
+
+from route_planner import _parse_maxspeed_mph
+
+
+def test_maxspeed_explicit_mph():
+    assert _parse_maxspeed_mph("35 mph") == 35.0
+
+
+def test_maxspeed_bare_number_is_kmh():
+    # OSM default unit is km/h: 80 km/h ~= 49.7 mph.
+    assert abs(_parse_maxspeed_mph("80") - 49.7) < 0.1
+    assert abs(_parse_maxspeed_mph(80) - 49.7) < 0.1
+
+
+def test_maxspeed_list_takes_first():
+    assert _parse_maxspeed_mph(["50 mph", "40 mph"]) == 50.0
+
+
+def test_maxspeed_unparseable_is_none():
+    assert _parse_maxspeed_mph("none") is None
+    assert _parse_maxspeed_mph(None) is None

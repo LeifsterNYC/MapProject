@@ -19,7 +19,7 @@ app = Flask(__name__)
 geolocator = Nominatim(user_agent="ramble_app")
 DEFAULT_START = "312 Thurston Ave, Ithaca, NY 14850"
 DEFAULT_END = "1781 Taughannock Blvd, Ulysses, NY 14886"
-MAX_DISTANCE_MILES = 50
+MAX_DISTANCE_MILES = 250  # trips over ~45 mi use the highway-class long-trip graph
 
 
 def _gmaps_url(coords, max_waypoints=8):

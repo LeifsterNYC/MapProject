@@ -22,38 +22,74 @@ DEFAULT_SPEEDS = {
 }
 
 
+# Trips longer than this (straight-line miles) switch to long-trip mode:
+# a highway-class-only network over the bbox, river + viewpoint features
+# only, no signal fetch. At that scale the scenic decision is which
+# corridors to take (NY-17 vs I-380/80, Rt 97 vs I-84), not side streets.
+LONG_TRIP_MILES = 45
+
+_SHORT_FILTER = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
+_LONG_FILTER = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|motorway_link|trunk_link|primary_link|secondary_link"]["access"!~"private"]'
+
+
+def _parse_maxspeed_mph(raw):
+    """Parse an OSM maxspeed tag into mph.
+
+    OSM's default unit is km/h worldwide; only explicit '<n> mph' tags (US/UK)
+    are miles. Treating bare numbers as mph made every non-US travel time
+    ~1.6x too optimistic. Returns None for unparseable values ('none',
+    'signals', missing).
+    """
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if isinstance(raw, (int, float)):
+        return float(raw) * 0.621371
+    if isinstance(raw, str):
+        try:
+            value = float(raw.split()[0])
+        except (ValueError, IndexError):
+            return None
+        return value if 'mph' in raw.lower() else value * 0.621371
+    return None
+
+
+def _straight_miles(start, end):
+    """Haversine distance in miles between two (lat, lon) points."""
+    lat1, lon1 = start
+    lat2, lon2 = end
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    h = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
+    return 2 * 3958.8 * math.asin(math.sqrt(h))
+
+
 def initialize_graph(start, end):
     buffer = 0.1
     n = max(start[0], end[0]) + buffer
     s = min(start[0], end[0]) - buffer
     e = max(start[1], end[1]) + buffer
     w = min(start[1], end[1]) - buffer
+    long_trip = _straight_miles(start, end) > LONG_TRIP_MILES
 
     # Round to 2 decimal places (~1 km) so nearby routes share a cache entry.
-    bbox_key = (round(n, 2), round(s, 2), round(e, 2), round(w, 2))
+    bbox_key = (round(n, 2), round(s, 2), round(e, 2), round(w, 2), long_trip)
 
     if bbox_key not in _GRAPH_CACHE:
-        cache_file = os.path.join(_CACHE_DIR, f'v{_CACHE_VERSION}_graph_{bbox_key}.pkl')
+        prefix = 'long_' if long_trip else ''
+        cache_file = os.path.join(_CACHE_DIR, f'v{_CACHE_VERSION}_{prefix}graph_{bbox_key[:4]}.pkl')
         if os.path.exists(cache_file):
             with open(cache_file, 'rb') as f:
                 graph = pickle.load(f)
         else:
-            private_filter = '["area"!~"yes"]["highway"~"motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]["access"!~"private"]'
-            graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=private_filter)
+            filt = _LONG_FILTER if long_trip else _SHORT_FILTER
+            graph = osmnx.graph_from_bbox((w, s, e, n), simplify=True, network_type='drive', custom_filter=filt)
 
             for u, v, k, data in graph.edges(data=True, keys=True):
                 highway = data.get('highway', 'residential')
                 if isinstance(highway, list):
                     highway = highway[0]
-                raw = data.get('maxspeed')
-                speed = None
-                if isinstance(raw, str):
-                    try:
-                        speed = float(raw.split()[0])
-                    except (ValueError, IndexError):
-                        speed = None
-                elif isinstance(raw, (int, float)):
-                    speed = float(raw)
+                speed = _parse_maxspeed_mph(data.get('maxspeed'))
                 if not speed or speed <= 0:
                     speed = DEFAULT_SPEEDS.get(highway, 25)
                 data['maxspeed'] = speed
@@ -66,7 +102,11 @@ def initialize_graph(start, end):
             # cross-town route). Fetch signal/stop points as features, cluster
             # poles into intersections, and penalize each edge whose end node
             # lands near one — one penalty per intersection crossing.
+            # Long-trip graphs are highway-class only: skip the signal fetch
+            # (rarely signalized, and the point fetch at that scale is huge).
             try:
+                if long_trip:
+                    raise ValueError('skip signals in long-trip mode')
                 sig_gdf = osmnx.features_from_bbox(
                     (w, s, e, n), tags={'highway': ['traffic_signals', 'stop']}
                 )
@@ -109,9 +149,12 @@ def initialize_graph(start, end):
             # Collect shoreline/centerline vertices — representative_point lands in the
             # middle of wide rivers (too far from shore for a 400m proximity check).
             try:
-                water_gdf = osmnx.features_from_bbox(
-                    (w, s, e, n), tags={'natural': 'water', 'waterway': ['river', 'stream']}
-                )
+                # Long trips: rivers only — lake/stream polygons at corridor
+                # scale are enormous, and river valleys (Delaware along 97,
+                # Hudson along the Palisades) are the water signal that matters.
+                water_tags = ({'waterway': 'river'} if long_trip else
+                              {'natural': 'water', 'waterway': ['river', 'stream']})
+                water_gdf = osmnx.features_from_bbox((w, s, e, n), tags=water_tags)
                 water_points = []
                 for geom in water_gdf.geometry:
                     if geom is None:
@@ -151,7 +194,11 @@ def initialize_graph(start, end):
             graph.graph['viewpoints'] = viewpoints
 
             # Fetch natural areas (forests, parks, meadows) for proximity scoring.
+            # Skipped on long trips: a percentile nature signal over a
+            # 25,000 km² corridor separates nothing, and the fetch is huge.
             try:
+                if long_trip:
+                    raise ValueError('skip nature in long-trip mode')
                 nature_gdf = osmnx.features_from_bbox(
                     (w, s, e, n),
                     tags={
@@ -455,12 +502,14 @@ def score_scenic_edges(G, weights: dict) -> None:
 # on the trip), so we probe a ladder and pick the best route within budget.
 _K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
 
-# Detour budget: additive, ceilinged at 12 extra minutes. A multiplicative
-# cap is wrong at both ends — too tight on a 5-minute trip (no rural detour
-# reachable) and so loose on a 20+ minute trip that 19-minute twisty
-# excursions slip in. Calibration showed no 4/4 window exists with a
-# multiplicative cap; every legitimate known-good detour is <= ~10 min extra.
+# Detour budget: additive, ceilinged at 12 extra minutes (or 20% of the fast
+# time on long trips, whichever is larger). A multiplicative cap is wrong at
+# both ends — too tight on a 5-minute trip and so loose on a 20+ minute trip
+# that 19-minute twisty excursions slip in. Calibration showed no 4/4 window
+# exists with a multiplicative cap. The 20% term lets a 4-hour trip earn a
+# ~45-minute scenic corridor swap (17/97/Palisades vs 380/80).
 _DETOUR_SLACK_HR = 12 / 60
+_DETOUR_SLACK_FRAC = 0.20
 
 # Selection objective: scenic gain minus a flat per-minute time penalty.
 # Calibrated by grid search over the fixture candidate tables with live
@@ -547,9 +596,10 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     fast_route = networkx.shortest_path(G, start, end, weight='travel_time')
     fast_time = networkx.path_weight(G, fast_route, weight='travel_time')
     fast_score = _tw_mean_score(G, fast_route)
-    # The max_detour slider can tighten the budget below the 12-min ceiling
+    # The max_detour slider can tighten the budget below the ceiling
     # (matters on short trips) but never extend it beyond.
-    budget = fast_time + min(fast_time * (max_detour_factor - 1.0), _DETOUR_SLACK_HR)
+    slack = max(_DETOUR_SLACK_HR, _DETOUR_SLACK_FRAC * fast_time)
+    budget = fast_time + min(fast_time * (max_detour_factor - 1.0), slack)
 
     candidates = []
     seen = {tuple(fast_route)}

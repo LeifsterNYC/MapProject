@@ -7,9 +7,6 @@ Each fixture:
                Towns/parks/landmarks geocode to tight points; road names resolve
                to ONE arbitrary point on the road, so they need looser thresholds.
   max_detour - allowed scenic_time / fast_time ratio for this trip
-
-Future (out of harness scale for now): Ithaca -> NYC preferring NY-17 + Palisades
-Pkwy over I-380/I-80 — exceeds the 50-mile app cap and needs a huge graph.
 """
 
 FIXTURES = [
@@ -52,6 +49,19 @@ FIXTURES = [
         "start": "312 Thurston Ave, Ithaca, NY 14850",
         "end": "1781 Taughannock Blvd, Ulysses, NY 14886",
         "via": [("Taughannock Falls State Park, NY", 1500)],
+        "max_detour": 3.0,
+    },
+    {
+        # LONG TRIP (highway-class graph): NY-17 through the Catskills, exit at
+        # Hancock onto Rt 97 along the Delaware to Port Jervis, then back east
+        # to I-87/Palisades — instead of the I-81/380/80 slog. Generous
+        # thresholds: corridor-level routing.
+        "name": "Ithaca -> NYC (17/97 long)",
+        "start": "312 Thurston Ave, Ithaca, NY 14850",
+        "end": "Columbus Circle, New York, NY",
+        "via": [("Hancock, NY", 3000),
+                ("Barryville, NY", 3000),
+                ("Port Jervis, NY", 3000)],
         "max_detour": 3.0,
     },
 ]
