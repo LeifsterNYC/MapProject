@@ -213,3 +213,10 @@ def test_ref_rescue_word_boundary():
 def test_scenic_yes_tag_boosts_any_class():
     assert _road_type_score({'highway': 'motorway', 'scenic': 'yes'}) == 0.9
     assert _road_type_score({'highway': 'residential', 'scenic': 'yes'}) == 0.9
+
+
+def test_ref_rescue_bare_numeric_county_roads():
+    # Norwegian fylkesvei carry bare numeric refs (ref=815, class primary).
+    assert _road_type_score({'highway': 'primary', 'ref': '815'}) == 0.8
+    # E-roads still excluded ('E 10' is not bare digits).
+    assert _road_type_score({'highway': 'trunk', 'ref': 'E 10'}) == 0.15

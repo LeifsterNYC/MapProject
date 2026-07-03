@@ -5,8 +5,15 @@ import math
 import os
 import pickle
 import re
+import time
 import numpy as np
 from scipy.spatial import KDTree
+
+try:  # osmnx raises this when a query matches zero elements — a legit result
+    from osmnx._errors import InsufficientResponseError as _EmptyResponse
+except ImportError:  # fallback if osmnx moves it
+    class _EmptyResponse(Exception):
+        pass
 
 # Keep the explicit scenic=yes way tag — OSM's direct "this road is scenic"
 # signal, common in Europe. Must be set before any graph fetch.
@@ -70,6 +77,59 @@ def _straight_miles(start, end):
     return 2 * 3958.8 * math.asin(math.sqrt(h))
 
 
+def _fetch_features(bbox, tags, retries=2, pause_s=20):
+    """Fetch OSM features with retry + per-tag-key fallback.
+
+    Overpass sheds heavy queries under load (connection refused) while small
+    ones pass, so after retries the combined query is split per tag key.
+    Returns (list_of_gdfs, ok). A query matching zero elements is a legitimate
+    empty result (ok=True), not a failure.
+    """
+    for attempt in range(retries):
+        try:
+            return [osmnx.features_from_bbox(bbox, tags=tags)], True
+        except _EmptyResponse:
+            return [], True
+        except Exception:
+            time.sleep(pause_s * (attempt + 1))
+    gdfs, ok = [], True
+    for key, val in tags.items():
+        try:
+            gdfs.append(osmnx.features_from_bbox(bbox, tags={key: val}))
+        except _EmptyResponse:
+            continue
+        except Exception:
+            ok = False
+    return gdfs, ok
+
+
+def _polygon_points(gdfs, subsample=4):
+    """Extract (lat, lon) vertices from feature geometries (any gdf list)."""
+    points = []
+    for gdf in gdfs:
+        for geom in gdf.geometry:
+            if geom is None:
+                continue
+            try:
+                if hasattr(geom, 'exterior'):
+                    geom_coords = list(geom.exterior.coords)
+                elif hasattr(geom, 'coords'):
+                    geom_coords = list(geom.coords)
+                elif hasattr(geom, 'geoms'):
+                    geom_coords = []
+                    for part in geom.geoms:
+                        if hasattr(part, 'exterior'):
+                            geom_coords.extend(part.exterior.coords)
+                        elif hasattr(part, 'coords'):
+                            geom_coords.extend(part.coords)
+                else:
+                    geom_coords = []
+                points.extend((y, x) for x, y in geom_coords[::subsample])
+            except Exception:
+                continue
+    return points
+
+
 def initialize_graph(start, end):
     buffer = 0.1
     n = max(start[0], end[0]) + buffer
@@ -115,23 +175,17 @@ def initialize_graph(start, end):
 
             # Long-trip graphs are highway-class only: skip the signal fetch
             # (rarely signalized, and the point fetch at that scale is huge).
-            try:
-                if long_trip:
-                    raise LookupError('skip signals in long-trip mode')
-                sig_gdf = osmnx.features_from_bbox(
-                    (w, s, e, n), tags={'highway': ['traffic_signals', 'stop']}
-                )
-                pts = sig_gdf.geometry.representative_point()
-                kinds = sig_gdf.get('highway')
-                signal_pts = [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
-                              if kind == 'traffic_signals']
-                stop_pts = [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
-                            if kind == 'stop']
-            except LookupError:
-                signal_pts, stop_pts = [], []  # intentional long-trip skip
-            except Exception:
-                signal_pts, stop_pts = [], []
-                features_ok = False
+            signal_pts, stop_pts = [], []
+            if not long_trip:
+                gdfs, ok = _fetch_features((w, s, e, n), {'highway': ['traffic_signals', 'stop']})
+                features_ok = features_ok and ok
+                for sig_gdf in gdfs:
+                    pts = sig_gdf.geometry.representative_point()
+                    kinds = sig_gdf.get('highway')
+                    signal_pts += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
+                                   if kind == 'traffic_signals']
+                    stop_pts += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
+                                 if kind == 'stop']
 
             def _cluster(points, cell_deg=0.0005):
                 """Merge points within ~50 m so multi-pole intersections count once."""
@@ -162,95 +216,39 @@ def initialize_graph(start, end):
             # Fetch water bodies for proximity scoring.
             # Collect shoreline/centerline vertices — representative_point lands in the
             # middle of wide rivers (too far from shore for a 400m proximity check).
-            try:
-                # Coastline is included in both modes: fjords and sea shores
-                # are natural=coastline in OSM, not natural=water — without it
-                # a road hugging Geirangerfjord or Vestfjorden gets no water
-                # credit. Long trips skip lakes/streams (enormous at corridor
-                # scale); river valleys + coasts are the signal that matters.
-                water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
-                              {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
-                water_gdf = osmnx.features_from_bbox((w, s, e, n), tags=water_tags)
-                water_points = []
-                for geom in water_gdf.geometry:
-                    if geom is None:
-                        continue
-                    try:
-                        if hasattr(geom, 'exterior'):
-                            geom_coords = list(geom.exterior.coords)
-                        elif hasattr(geom, 'coords'):
-                            geom_coords = list(geom.coords)
-                        elif hasattr(geom, 'geoms'):
-                            geom_coords = []
-                            for part in geom.geoms:
-                                if hasattr(part, 'exterior'):
-                                    geom_coords.extend(part.exterior.coords)
-                                elif hasattr(part, 'coords'):
-                                    geom_coords.extend(part.coords)
-                        else:
-                            geom_coords = []
-                        # coords are (lon, lat); subsample every 4th vertex
-                        water_points.extend((y, x) for x, y in geom_coords[::4])
-                    except Exception:
-                        continue
-            except Exception:
-                water_points = []
-                features_ok = False
-            graph.graph['water_points'] = water_points
+            # Coastline is included in both modes: fjords and sea shores are
+            # natural=coastline in OSM, not natural=water — without it a road
+            # hugging Geirangerfjord or Vestfjorden gets no water credit. Long
+            # trips skip lakes/streams (enormous at corridor scale); river
+            # valleys + coasts are the signal that matters.
+            water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
+                          {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
+            gdfs, ok = _fetch_features((w, s, e, n), water_tags)
+            features_ok = features_ok and ok
+            graph.graph['water_points'] = _polygon_points(gdfs)
 
             # Fetch roadside viewpoints (tourism=viewpoint only — not natural=peak,
             # which are tagged on mountain tops far from roads).
-            try:
-                vp_gdf = osmnx.features_from_bbox(
-                    (w, s, e, n), tags={'tourism': ['viewpoint', 'scenic_viewpoint']}
-                )
+            gdfs, ok = _fetch_features((w, s, e, n), {'tourism': ['viewpoint', 'scenic_viewpoint']})
+            features_ok = features_ok and ok
+            viewpoints = []
+            for vp_gdf in gdfs:
                 pts = vp_gdf.geometry.representative_point()
-                viewpoints = list(zip(pts.y, pts.x))
-            except Exception:
-                viewpoints = []
-                features_ok = False
+                viewpoints += list(zip(pts.y, pts.x))
             graph.graph['viewpoints'] = viewpoints
 
             # Fetch natural areas (forests, parks, meadows) for proximity scoring.
             # Skipped on long trips: a percentile nature signal over a
             # 25,000 km² corridor separates nothing, and the fetch is huge.
-            try:
-                if long_trip:
-                    raise LookupError('skip nature in long-trip mode')
-                nature_gdf = osmnx.features_from_bbox(
-                    (w, s, e, n),
-                    tags={
-                        'natural': ['wood', 'scrub', 'heath', 'grassland'],
-                        'landuse': ['forest', 'meadow', 'grass', 'village_green', 'recreation_ground'],
-                        'leisure': ['park', 'nature_reserve'],
-                    }
-                )
-                nature_points = []
-                for geom in nature_gdf.geometry:
-                    if geom is None:
-                        continue
-                    try:
-                        if hasattr(geom, 'exterior'):
-                            geom_coords = list(geom.exterior.coords)
-                        elif hasattr(geom, 'coords'):
-                            geom_coords = list(geom.coords)
-                        elif hasattr(geom, 'geoms'):
-                            geom_coords = []
-                            for part in geom.geoms:
-                                if hasattr(part, 'exterior'):
-                                    geom_coords.extend(part.exterior.coords)
-                                elif hasattr(part, 'coords'):
-                                    geom_coords.extend(part.coords)
-                        else:
-                            geom_coords = []
-                        nature_points.extend((y, x) for x, y in geom_coords[::4])
-                    except Exception:
-                        continue
-            except LookupError:
-                nature_points = []  # intentional long-trip skip
-            except Exception:
-                nature_points = []
-                features_ok = False
+            nature_points = []
+            if not long_trip:
+                gdfs, ok = _fetch_features((w, s, e, n), {
+                    'natural': ['wood', 'scrub', 'heath', 'grassland'],
+                    'landuse': ['forest', 'meadow', 'grass', 'village_green', 'recreation_ground'],
+                    'leisure': ['park', 'nature_reserve'],
+                })
+                features_ok = features_ok and ok
+                nature_points = _polygon_points(gdfs)
             graph.graph['nature_points'] = nature_points
 
             if features_ok:
@@ -362,7 +360,9 @@ def _road_type_score(data):
         ref = data.get('ref')
         if isinstance(ref, list):
             ref = ref[0]
-        if isinstance(ref, str) and _SCENIC_REF_RE.search(ref):
+        # Bare numeric refs are numbered county/provincial roads in much of
+        # Europe (Norwegian fylkesvei tag ref=815, not 'Fv 815').
+        if isinstance(ref, str) and (_SCENIC_REF_RE.search(ref) or ref.strip().isdigit()):
             score = max(score, 0.8)
     return score
 
