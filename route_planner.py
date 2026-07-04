@@ -9,6 +9,8 @@ import time
 import numpy as np
 from scipy.spatial import KDTree
 
+import pbf_source
+
 try:  # osmnx raises this when a query matches zero elements — a legit result
     from osmnx._errors import InsufficientResponseError as _EmptyResponse
 except ImportError:  # fallback if osmnx moves it
@@ -214,11 +216,20 @@ def _fetch_connected_graph(start, end, long_trip):
     filt = _LONG_FILTER if long_trip else _SHORT_FILTER
     graph = None
     bbox = None
-    for factor in (1, 2, 4):
+    # Local PBF scans cost the same regardless of bbox size (whole-file read),
+    # so start generous and usually finish in one scan; Overpass transfers
+    # scale with area, so grow incrementally there.
+    bn, bs, be, bw = bbox_for(start, end)
+    factors = (2, 4) if pbf_source.find_covering_pbf((bw, bs, be, bn)) else (1, 2, 4)
+    for factor in factors:
         n, s, e, w = bbox_for(start, end, buffer_lat=0.1 * factor)
-        graph = _with_overpass_fallback(lambda: osmnx.graph_from_bbox(
-            (w, s, e, n), simplify=True, network_type='drive',
-            custom_filter=filt, retain_all=True))
+        pbf_path = pbf_source.find_covering_pbf((w, s, e, n))
+        if pbf_path:
+            graph = pbf_source.network_graph(pbf_path, (w, s, e, n), long_trip)
+        else:
+            graph = _with_overpass_fallback(lambda: osmnx.graph_from_bbox(
+                (w, s, e, n), simplify=True, network_type='drive',
+                custom_filter=filt, retain_all=True))
         bbox = (n, s, e, w)
         start_node = osmnx.distance.nearest_nodes(graph, X=[start[1]], Y=[start[0]])[0]
         end_node = osmnx.distance.nearest_nodes(graph, X=[end[1]], Y=[end[0]])[0]
@@ -270,19 +281,37 @@ def initialize_graph(start, end):
             # water/viewpoints. Serve it from memory but skip the disk write.
             features_ok = True
 
-            # Long-trip graphs are highway-class only: skip the signal fetch
-            # (rarely signalized, and the point fetch at that scale is huge).
-            signal_pts, stop_pts = [], []
-            if not long_trip:
-                gdfs, ok = _fetch_features((w, s, e, n), {'highway': ['traffic_signals', 'stop']})
-                features_ok = features_ok and ok
-                for sig_gdf in gdfs:
+            def _split_signals(gdf_list):
+                sig, stp = [], []
+                for sig_gdf in gdf_list:
                     pts = sig_gdf.geometry.representative_point()
                     kinds = sig_gdf.get('highway')
-                    signal_pts += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
-                                   if kind == 'traffic_signals']
-                    stop_pts += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
-                                 if kind == 'stop']
+                    sig += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
+                            if kind == 'traffic_signals']
+                    stp += [(y, x) for y, x, kind in zip(pts.y, pts.x, kinds)
+                            if kind == 'stop']
+                return sig, stp
+
+            # Feature source: a covering local PBF (offline, fast) or Overpass.
+            signal_pts, stop_pts = [], []
+            water_gdfs, vp_gdfs, nature_gdfs = [], [], []
+            pbf_path = pbf_source.find_covering_pbf((w, s, e, n))
+            if pbf_path:
+                try:
+                    feats = pbf_source.features(pbf_path, (w, s, e, n), long_trip)
+                    water_gdfs = feats['water']
+                    vp_gdfs = feats['viewpoints']
+                    nature_gdfs = feats['nature']
+                    signal_pts, stop_pts = _split_signals(feats['signals'])
+                except Exception:
+                    pbf_path = None  # fall through to Overpass
+            if not pbf_path:
+                # Long-trip graphs are highway-class only: skip the signal
+                # fetch (rarely signalized, and huge at that scale).
+                if not long_trip:
+                    gdfs, ok = _fetch_features((w, s, e, n), {'highway': ['traffic_signals', 'stop']})
+                    features_ok = features_ok and ok
+                    signal_pts, stop_pts = _split_signals(gdfs)
 
             def _cluster(points, cell_deg=0.0005):
                 """Merge points within ~50 m so multi-pole intersections count once."""
@@ -310,45 +339,40 @@ def initialize_graph(start, end):
                 elif stop_tree is not None and stop_tree.query(q)[0] < 25:
                     data['travel_time'] += _STOP_DELAY_HR
 
-            # Fetch water bodies for proximity scoring.
-            # Collect shoreline/centerline vertices — representative_point lands in the
-            # middle of wide rivers (too far from shore for a 400m proximity check).
-            # Coastline is included in both modes: fjords and sea shores are
+            # Water/viewpoint/nature features via Overpass when no local PBF
+            # covered this area. Shoreline/centerline VERTICES are collected —
+            # representative_point lands mid-river, too far for proximity.
+            # Coastline included in both modes: fjords and sea shores are
             # natural=coastline in OSM, not natural=water — without it a road
             # hugging Geirangerfjord or Vestfjorden gets no water credit. Long
-            # trips skip lakes/streams (enormous at corridor scale); river
-            # valleys + coasts are the signal that matters.
-            water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
-                          {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
-            fetch_water = _fetch_features_tiled if long_trip else _fetch_features
-            gdfs, ok = fetch_water((w, s, e, n), water_tags)
-            features_ok = features_ok and ok
-            graph.graph['water_points'] = _polygon_points(gdfs)
+            # trips skip lakes/streams (enormous at corridor scale).
+            if not pbf_path:
+                water_tags = ({'waterway': 'river', 'natural': 'coastline'} if long_trip else
+                              {'natural': ['water', 'coastline'], 'waterway': ['river', 'stream']})
+                fetch = _fetch_features_tiled if long_trip else _fetch_features
+                water_gdfs, ok = fetch((w, s, e, n), water_tags)
+                features_ok = features_ok and ok
+                # Viewpoints: tourism=viewpoint only — not natural=peak, which
+                # are tagged on mountain tops far from roads.
+                vp_gdfs, ok = fetch((w, s, e, n), {'tourism': ['viewpoint', 'scenic_viewpoint']})
+                features_ok = features_ok and ok
+                # Natural areas, skipped on long trips: a percentile nature
+                # signal over a 25,000 km² corridor separates nothing.
+                if not long_trip:
+                    nature_gdfs, ok = _fetch_features((w, s, e, n), {
+                        'natural': ['wood', 'scrub', 'heath', 'grassland'],
+                        'landuse': ['forest', 'meadow', 'grass', 'village_green', 'recreation_ground'],
+                        'leisure': ['park', 'nature_reserve'],
+                    })
+                    features_ok = features_ok and ok
 
-            # Fetch roadside viewpoints (tourism=viewpoint only — not natural=peak,
-            # which are tagged on mountain tops far from roads).
-            fetch_vp = _fetch_features_tiled if long_trip else _fetch_features
-            gdfs, ok = fetch_vp((w, s, e, n), {'tourism': ['viewpoint', 'scenic_viewpoint']})
-            features_ok = features_ok and ok
+            graph.graph['water_points'] = _polygon_points(water_gdfs)
             viewpoints = []
-            for vp_gdf in gdfs:
+            for vp_gdf in vp_gdfs:
                 pts = vp_gdf.geometry.representative_point()
                 viewpoints += list(zip(pts.y, pts.x))
             graph.graph['viewpoints'] = viewpoints
-
-            # Fetch natural areas (forests, parks, meadows) for proximity scoring.
-            # Skipped on long trips: a percentile nature signal over a
-            # 25,000 km² corridor separates nothing, and the fetch is huge.
-            nature_points = []
-            if not long_trip:
-                gdfs, ok = _fetch_features((w, s, e, n), {
-                    'natural': ['wood', 'scrub', 'heath', 'grassland'],
-                    'landuse': ['forest', 'meadow', 'grass', 'village_green', 'recreation_ground'],
-                    'leisure': ['park', 'nature_reserve'],
-                })
-                features_ok = features_ok and ok
-                nature_points = _polygon_points(gdfs)
-            graph.graph['nature_points'] = nature_points
+            graph.graph['nature_points'] = _polygon_points(nature_gdfs)
 
             if features_ok:
                 os.makedirs(_CACHE_DIR, exist_ok=True)
