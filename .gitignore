@@ -8,3 +8,4 @@ CLAUDE.md
 .claude/
 *.env
 .geocode_cache.json
+pbf/

@@ -1,0 +1,13 @@
+flask
+python-dotenv
+requests
+geopy
+osmnx>=2.0
+networkx
+folium
+scipy
+numpy
+shapely
+pyrosm
+osmium
+pytest
