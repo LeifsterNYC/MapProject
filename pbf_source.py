@@ -21,6 +21,14 @@ PBF_DIR = os.environ.get(
 # so the connectivity loop and the feature pass reuse the same clip.
 _CLIP_CACHE = {}
 
+# Tag families Ramble reads (network_graph + features). Everything else in
+# the clip — buildings, addresses, POIs, the bulk of any metro area — is
+# dead weight that pyrosm would still scan single-threaded: an unfiltered
+# Ithaca->NYC corridor clip took 2+ hours in _get_pbf_elements alone.
+# osmium tags-filter keeps matched objects with ALL their tags plus their
+# referenced nodes, so maxspeed/ref/lanes/scenic on highway ways survive.
+_KEEP_TAGS = ['highway', 'natural', 'waterway', 'landuse', 'leisure', 'tourism']
+
 
 def _clipped(path, bbox):
     if not shutil.which('osmium'):
@@ -34,7 +42,14 @@ def _clipped(path, bbox):
             ['osmium', 'extract', '--overwrite', '-b', f'{w},{s},{e},{n}',
              '-s', 'complete_ways', '-o', tmp.name, path],
             check=True, capture_output=True)
-        _CLIP_CACHE[key] = tmp.name
+        filtered = tempfile.NamedTemporaryFile(suffix='.osm.pbf', delete=False)
+        filtered.close()
+        subprocess.run(
+            ['osmium', 'tags-filter', '--overwrite', '-o', filtered.name,
+             tmp.name] + _KEEP_TAGS,
+            check=True, capture_output=True)
+        os.remove(tmp.name)
+        _CLIP_CACHE[key] = filtered.name
     return _CLIP_CACHE[key]
 
 _SHORT_CLASSES = [
