@@ -173,6 +173,31 @@ def test_budget_scales_with_trip_length():
     assert scenic == [1, 3, 4, 5]  # +30 min on a 3-hour trip: within 20% slack
 
 
+from route_planner import _scenic_anchors
+
+
+def test_scenic_anchors_exclude_endpoint_clusters():
+    # A top-scenic cluster at the destination must not take an anchor slot:
+    # scenery at an endpoint needs no detour (Ithaca->NYC: Manhattan's
+    # viewpoint clusters claimed all four anchors and every candidate
+    # collapsed onto the fast route).
+    G = nx.MultiDiGraph()
+    coords = {1: 42.0, 2: 43.0, 10: 42.02, 11: 42.03, 20: 42.5, 21: 42.51}
+    for u, v, t in [(1, 2, 0.2), (10, 11, 0.995), (20, 21, 0.995)]:
+        G.add_edge(u, v, travel_time=0.1, scenic_t=t, scenic_score=1.0,
+                   length=1000.0)
+    for node, lat in coords.items():
+        G.nodes[node]['y'] = lat
+        G.nodes[node]['x'] = -76.0
+    # Trip 1 -> 2 spans 1 deg; exclusion radius 0.15 deg swallows the cluster
+    # near the start but not the mid-route one.
+    anchors = _scenic_anchors(G, 1, 2)
+    assert 21 in anchors
+    assert 11 not in anchors
+    # Without trip context both clusters are eligible.
+    assert set(_scenic_anchors(G)) == {11, 21}
+
+
 from route_planner import _parse_maxspeed_mph
 
 
@@ -195,8 +220,21 @@ def test_maxspeed_unparseable_is_none():
     assert _parse_maxspeed_mph(None) is None
 
 
+def test_maxspeed_nan_is_none():
+    # pyrosm emits NaN (not None) for untagged maxspeed; NaN must not leak
+    # into travel_time (it slips past the caller's `not speed` guard).
+    assert _parse_maxspeed_mph(float("nan")) is None
+
+
 def test_ref_rescue_norwegian_county_roads():
     assert _road_type_score({'highway': 'secondary', 'ref': 'Fv 815'}) == 0.8
+
+
+def test_ref_rescue_denied_to_multilane_arterials():
+    # NY 59 through Rockland County: state ref, but 4 lanes of strip mall.
+    assert _road_type_score({'highway': 'primary', 'ref': 'NY 59', 'lanes': '4'}) == 0.3
+    # Two-laners (and untagged lanes) keep the rescue.
+    assert _road_type_score({'highway': 'primary', 'ref': 'NY 97', 'lanes': '2'}) == 0.8
     assert _road_type_score({'highway': 'primary', 'ref': 'Rv 15'}) == 0.8
 
 
@@ -239,11 +277,11 @@ def test_marginal_gain_stays_on_fast_route():
     G = _detour_graph()
     for u, v, k, d in G.edges(data=True, keys=True):
         if d['scenic_t'] > 0.5:
-            d['scenic_score'] = 1.30  # gain 0.3 - penalty 0.078 = 0.22 > band: takes it
+            d['scenic_score'] = 1.65  # gain 0.65 - penalty 0.5*(6/6) = 0.15 > band: takes it
     _, scenic, _, _ = plan_scenic_route(G, 1, 5, 3.0)
     assert scenic == [1, 3, 4, 5]
     for u, v, k, d in G.edges(data=True, keys=True):
         if d['scenic_t'] > 0.5:
-            d['scenic_score'] = 1.10  # gain 0.1 - 0.078 = 0.022 < band: stays fast
+            d['scenic_score'] = 1.50  # gain 0.5 - 0.5 = 0.0 < band: stays fast
     _, scenic, _, _ = plan_scenic_route(G, 1, 5, 3.0)
     assert scenic == [1, 2, 5]

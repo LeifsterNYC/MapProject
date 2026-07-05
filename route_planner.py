@@ -24,7 +24,9 @@ if 'scenic' not in osmnx.settings.useful_tags_way:
 
 _GRAPH_CACHE: dict = {}
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), '.graph_cache')
-_CACHE_VERSION = 6  # Bump to invalidate all on-disk caches when fetched data changes.
+_CACHE_VERSION = 7  # Bump to invalidate all on-disk caches when fetched data changes.
+# v7: v6 graphs built via pyrosm carry NaN travel_time on every untagged-
+# maxspeed edge (pyrosm emits NaN where Overpass omits the tag).
 _SIGNAL_DELAY_HR = 35 / 3600  # 35-second stop penalty at signalized intersections.
 _STOP_DELAY_HR = 12 / 3600    # 12-second penalty at stop signs.
 
@@ -87,6 +89,10 @@ def _parse_maxspeed_mph(raw):
     if isinstance(raw, list):
         raw = raw[0] if raw else None
     if isinstance(raw, (int, float)):
+        # pyrosm emits NaN (not None) for an untagged maxspeed; NaN slips past
+        # the caller's `not speed` guard and poisons travel_time for the edge.
+        if math.isnan(raw):
+            return None
         return float(raw) * 0.621371
     if isinstance(raw, str):
         try:
@@ -216,12 +222,13 @@ def _fetch_connected_graph(start, end, long_trip):
     filt = _LONG_FILTER if long_trip else _SHORT_FILTER
     graph = None
     bbox = None
-    # Local PBF scans cost the same regardless of bbox size (whole-file read),
-    # so start generous and usually finish in one scan; Overpass transfers
-    # scale with area, so grow incrementally there.
-    bn, bs, be, bw = bbox_for(start, end)
-    factors = (2, 4) if pbf_source.find_covering_pbf((bw, bs, be, bn)) else (1, 2, 4)
-    for factor in factors:
+    # Always start at factor 1 and widen only on disconnection. Percentile
+    # scoring is relative to the graph, so bbox scope is part of the scoring
+    # calibration: a factor-2 start (the old PBF fast-path) pulled in 4x the
+    # area, diluted local scenic contrast, and froze the K-ladder (measured:
+    # Accord->New Paltz stopped diverging onto the 44/55 ridge). PBF scans
+    # are cheap now that the osmium clip is tag-filtered.
+    for factor in (1, 2, 4):
         n, s, e, w = bbox_for(start, end, buffer_lat=0.1 * factor)
         pbf_path = pbf_source.find_covering_pbf((w, s, e, n))
         if pbf_path:
@@ -480,6 +487,17 @@ def _road_type_score(data):
     # a scenic road (in Lofoten it is precisely the road to avoid).
     if highway in ('residential', 'unclassified', 'tertiary',
                    'primary', 'secondary', 'primary_link', 'secondary_link'):
+        # The rescue is for mis-classed scenic TWO-LANERS. A 3+ lane road
+        # carrying a state ref is just an arterial (NY-59 through Rockland's
+        # strip malls scored 0.843 scenic_t and out-ranked the Delaware's
+        # NY-97 per minute) — deny it the rescue.
+        lanes = data.get('lanes')
+        try:
+            n_lanes = int(lanes) if not isinstance(lanes, list) else int(lanes[0])
+        except (TypeError, ValueError):
+            n_lanes = None
+        if n_lanes is not None and n_lanes >= 3:
+            return score
         ref = data.get('ref')
         if isinstance(ref, list):
             ref = ref[0]
@@ -636,13 +654,19 @@ def score_scenic_edges(G, weights: dict) -> None:
             g * (
                 CURVE_BOOST * w_curve * curve +
                 NATURE_DAMP * w_nature * float(nature_rel[i]) +
-                W_WATER * float(water_rel[i])
+                W_WATER * float(water_rel[i]) +
+                # Viewpoint terms must sit under the gate too: metro cores are
+                # saturated with tourism=viewpoint (decks, bridges, parks), so
+                # ungated the +3.0 cluster bonus handed Manhattan every t>=0.99
+                # cell and hijacked all four scenic anchors on the NYC fixture.
+                # Rural overlook roads (44/55 ridge, Taughannock) gate at 1.0
+                # and keep full credit.
+                W_VIEW * float(view_abs[i]) +
+                W_VIEWCNT * float(vcnt_term[i])
             ) +
             w_road * road +
             W_SPEED * _speed_score(data) +
-            W_TRAFFIC * _traffic_score(data) +
-            W_VIEW * float(view_abs[i]) +
-            W_VIEWCNT * float(vcnt_term[i])
+            W_TRAFFIC * _traffic_score(data)
         )
 
     # Empirical normalization: percentile-rank the total score across the graph.
@@ -662,7 +686,10 @@ def score_scenic_edges(G, weights: dict) -> None:
 # K values probed by plan_scenic_route. Route choice is knife-edged in K (a
 # single fixed K yields either the fast route or a blown detour budget depending
 # on the trip), so we probe a ladder and pick the best route within budget.
-_K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
+# Sub-1.0 rungs matter on long corridor trips: on Ithaca->NYC the 17/97
+# corridor appears at K=0.75 (+32 min, in budget) while K=1.0 already
+# overshoots the budget with +52 min of wandering on top of the same corridor.
+_K_LADDER = (0.5, 0.75, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
 
 # Detour budget: additive, ceilinged at 12 extra minutes (or 20% of the fast
 # time on long trips, whichever is larger). A multiplicative cap is wrong at
@@ -673,12 +700,16 @@ _K_LADDER = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0)
 _DETOUR_SLACK_HR = 12 / 60
 _DETOUR_SLACK_FRAC = 0.20
 
-# Selection objective: scenic gain minus a flat per-minute time penalty.
-# Calibrated by grid search over the fixture candidate tables with live
-# curviness + the viewpoint-cluster term + the additive budget: the 4/4
-# window is (0, 0.0264], and 0.013 is its center. Re-run `python evaluate.py`
-# after ANY scoring change.
-_TIME_PENALTY_PER_MIN = 0.013  # scenic-score units per extra minute
+# Selection objective: scenic gain minus a penalty on FRACTIONAL extra time
+# (extra/fast). A flat per-minute penalty (the previous form, 0.013/min,
+# 4/4 window (0, 0.0264]) implicitly assumes one trip scale: it prices
+# +5 min identically on a 23-minute hop and a 4-hour corridor trip, which
+# made Ithaca->NYC cut the Rt 97 corridor short at Callicoon to save 5
+# minutes on a 245-minute drive. Fractional pricing keeps the short-trip
+# calibration (0.013/min ~ 0.5 per-fraction at the ~40-min fixture midpoint)
+# while letting long trips spend minutes proportionally. Re-run
+# `python evaluate.py` after ANY scoring change.
+_TIME_PENALTY_FRAC = 0.5  # scenic-score units per (extra_time / fast_time)
 
 # Dead-band: a candidate must beat the fast route by at least this much to
 # replace it. Near-zero-value winners are noise — e.g. a pointless one-block
@@ -704,19 +735,34 @@ def _trim_to_simple(route):
     return out
 
 
-def _scenic_anchors(G, max_anchors=4):
+def _scenic_anchors(G, start=None, end=None, max_anchors=4):
     """Pick up to max_anchors nodes in the most scenic clusters of the graph.
 
     The K-ladder cannot generate a distant geographic excursion — a cheaper
     connected in-town path always dominates under global exp reweighting
     (verified: no K in [1, 20] ever surfaces a known scenic loop). Seeding
     candidates through top-scenic clusters fixes that.
+
+    Cells near the trip endpoints are excluded: scenery at an endpoint needs
+    no detour to visit, so an endpoint anchor's legs collapse onto the fast
+    route (measured on Ithaca->NYC: Manhattan's viewpoint clusters took all
+    four anchors and every candidate was fast-route + epsilon). Anchors exist
+    to pull the middle of the route.
     """
+    exclude = []  # ((lat, lon), radius_deg) around each endpoint
+    if start is not None and end is not None:
+        s = (G.nodes[start]['y'], G.nodes[start]['x'])
+        e = (G.nodes[end]['y'], G.nodes[end]['x'])
+        span = math.hypot(s[0] - e[0], s[1] - e[1])
+        exclude = [(s, 0.15 * span), (e, 0.15 * span)]
     best = []  # (scenic_t, node, lat, lon) for top-t edge endpoints
     for u, v, k, data in G.edges(data=True, keys=True):
         t = data.get('scenic_t', 0.0)
         if t >= 0.99:
-            best.append((t, v, G.nodes[v]['y'], G.nodes[v]['x']))
+            lat, lon = G.nodes[v]['y'], G.nodes[v]['x']
+            if any(math.hypot(lat - py, lon - px) < r for (py, px), r in exclude):
+                continue
+            best.append((t, v, lat, lon))
     if not best:
         return []
     # Grid-bin (~2 km cells) and rank cells by summed scenic_t.
@@ -791,7 +837,7 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
     # through each top-scenic cluster.
     for u, v, k, data in G.edges(data=True, keys=True):
         data['scenic_cost'] = data['travel_time'] * math.exp(3.0 * (1.0 - data.get('scenic_t', 0.0)))
-    for anchor in _scenic_anchors(G):
+    for anchor in _scenic_anchors(G, start, end):
         for weight in ('travel_time', 'scenic_cost'):
             try:
                 leg_in = networkx.shortest_path(G, start, anchor, weight=weight)
@@ -808,8 +854,8 @@ def plan_scenic_route(G, start, end, max_detour_factor) -> tuple:
         time = networkx.path_weight(G, route, weight='travel_time')
         if time > budget:
             continue
-        extra_min = (time - fast_time) * 60.0
-        value = (_tw_mean_score(G, route) - fast_score) - _TIME_PENALTY_PER_MIN * extra_min
+        value = (_tw_mean_score(G, route) - fast_score) \
+            - _TIME_PENALTY_FRAC * (time - fast_time) / fast_time
         if value > best_value:
             best_route, best_time, best_value = route, time, value
 
